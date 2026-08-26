@@ -1,0 +1,281 @@
+@import "tailwindcss";
+
+/* ================================
+   Root Theme
+================================ */
+
+:root {
+
+  /* Executive Backgrounds */
+
+  --bg-primary: #07111F;
+  --bg-secondary: #0C1728;
+  --bg-tertiary: #111F34;
+
+  /* Executive Cards */
+
+  --surface: rgba(18,29,46,0.88);
+  --surface-hover: rgba(24,37,57,0.95);
+
+  /* Borders */
+
+  --border: rgba(255,255,255,.08);
+
+  /* Typography */
+
+  --text-primary:#F8FAFC;
+  --text-secondary:#CBD5E1;
+  --text-muted:#94A3B8;
+
+  /* Brand */
+
+  --primary:#2563EB;
+  --primary-hover:#1D4ED8;
+
+  /* Success */
+
+  --success:#10B981;
+
+  /* Warning */
+
+  --warning:#F59E0B;
+
+  /* Danger */
+
+  --danger:#EF4444;
+
+  /* Premium Gradient */
+
+  --gradient-primary:
+  linear-gradient(
+      135deg,
+      #2563EB 0%,
+      #4F46E5 50%,
+      #7C3AED 100%
+  );
+
+}
+
+/* ================================
+   Dark Mode Variables
+================================ */
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+/* ================================
+   Base
+================================ */
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+
+    background:var(--bg-primary);
+
+    color:var(--text-primary);
+
+    font-family:
+      Inter,
+      system-ui,
+      sans-serif;
+
+    -webkit-font-smoothing:antialiased;
+
+    -moz-osx-font-smoothing:grayscale;
+
+}
+
+/* ================================
+   Text Selection
+================================ */
+
+::selection {
+  background: #2563eb;
+  color: white;
+}
+
+/* ================================
+   Premium Scrollbar
+================================ */
+
+::-webkit-scrollbar {
+  width: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #020617;
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(#2563eb, #06b6d4);
+  border-radius: 20px;
+}
+
+/* ==========================================================
+   GLOBAL FORM STYLING
+========================================================== */
+
+label {
+  display: block;
+  margin-bottom: 0.5rem;
+  color: #334155;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+
+  background: #ffffff !important;
+  color: #0f172a !important;
+
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+
+  padding: 0.85rem 1rem;
+
+  font-size: 1rem;
+  line-height: 1.5;
+
+  opacity: 1 !important;
+
+  transition: all 0.2s ease;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #94a3b8 !important;
+  opacity: 1 !important;
+}
+
+select {
+  appearance: auto;
+}
+
+input:hover,
+select:hover,
+textarea:hover {
+  border-color: #94a3b8;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.15);
+  outline: none;
+}
+
+/* Prevent browser disabled styling from affecting normal inputs */
+
+input:not(:disabled),
+select:not(:disabled),
+textarea:not(:disabled) {
+  opacity: 1 !important;
+}
+
+/* Disabled fields */
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  background: #f8fafc;
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+
+/* Autofill Fix (Chrome/Safari) */
+
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+textarea:-webkit-autofill,
+select:-webkit-autofill {
+  -webkit-text-fill-color: #0f172a;
+  -webkit-box-shadow: 0 0 0px 1000px white inset;
+  transition: background-color 9999s ease-in-out 0s;
+}
+
+/* Checkbox & Radio */
+
+input[type="checkbox"],
+input[type="radio"] {
+  width: 18px;
+  height: 18px;
+  accent-color: #2563eb;
+  cursor: pointer;
+}
+/* Executive Glass */
+
+.executive-card{
+
+background:var(--surface);
+
+border:1px solid var(--border);
+
+backdrop-filter:blur(24px);
+
+border-radius:24px;
+
+box-shadow:
+
+0 10px 40px rgba(0,0,0,.35),
+
+inset 0 1px rgba(255,255,255,.03);
+
+transition:.35s;
+
+}
+
+.executive-card:hover{
+
+background:var(--surface-hover);
+
+transform:translateY(-3px);
+
+}
+
+/* Executive Gradient */
+
+.executive-gradient{
+
+background:var(--gradient-primary);
+
+}
+
+/* Executive Border */
+
+.executive-border{
+
+border:1px solid var(--border);
+
+}
+
+/* Executive Text */
+
+.executive-title{
+
+color:var(--text-primary);
+
+}
+
+.executive-subtitle{
+
+color:var(--text-secondary);
+
+}
+
+.executive-muted{
+
+color:var(--text-muted);
+
+}

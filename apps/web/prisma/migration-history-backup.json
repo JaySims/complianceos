@@ -1,0 +1,32 @@
+[
+  {
+    "id": "448acdbc-aefe-4f84-86ab-859c1e5a3082",
+    "checksum": "6fa1ba63b9eef8de12639e547d3ea883d340413f5e247e83356e04a42652c7d2",
+    "finished_at": "2026-07-12T11:01:40.087Z",
+    "migration_name": "20260712110138_initial_schema",
+    "logs": null,
+    "rolled_back_at": null,
+    "started_at": "2026-07-12T11:01:39.051Z",
+    "applied_steps_count": 1
+  },
+  {
+    "id": "e863c513-7400-4dc7-a0b0-1c3edccf66cd",
+    "checksum": "1a16ca810bf185770dbecfba32f642020cd1681e53e3178a6b31ad2925a19545",
+    "finished_at": "2026-07-13T15:09:54.225Z",
+    "migration_name": "20260713150952_extend_organization_registration",
+    "logs": null,
+    "rolled_back_at": null,
+    "started_at": "2026-07-13T15:09:53.270Z",
+    "applied_steps_count": 1
+  },
+  {
+    "id": "83e57bac-d832-4d1c-9beb-e0c8ae4b295e",
+    "checksum": "171d3ec6ebf489c5f3bd79da2264f0a03ead307dbeb40866d757a23781a98cd4",
+    "finished_at": "2026-07-14T18:53:41.517Z",
+    "migration_name": "20260714185339_extend_organization_registration",
+    "logs": null,
+    "rolled_back_at": null,
+    "started_at": "2026-07-14T18:53:40.499Z",
+    "applied_steps_count": 1
+  }
+]

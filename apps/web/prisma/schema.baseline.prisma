@@ -1,0 +1,124 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id              String           @id @default(cuid())
+  fullName        String
+  email           String           @unique
+  password        String?
+  role            UserRole         @default(USER)
+  organizationId  String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  assessments     Assessment[]
+  recommendations Recommendation[]
+  organization    Organization?    @relation("PrimaryOrganizationUsers", fields: [organizationId], references: [id])
+}
+
+model Organization {
+  id                  String       @id @default(cuid())
+  name                String
+  tradingName         String?
+  registrationNumber  String?      @unique
+  website             String?
+  industry            String?
+  country             String?
+  employeeCount       Int?
+  trustScore          Float        @default(0)
+  complianceScore     Float        @default(0)
+  onboardingCompleted Boolean      @default(false)
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+  assessments         Assessment[]
+  documents           Document[]
+  users               User[]       @relation("PrimaryOrganizationUsers")
+}
+
+model Framework {
+  id          String       @id @default(cuid())
+  name        String
+  version     String?
+  description String?
+  createdAt   DateTime     @default(now())
+  assessments Assessment[]
+}
+
+model Assessment {
+  id             String           @id @default(cuid())
+  title          String
+  score          Float?
+  status         AssessmentStatus @default(DRAFT)
+  organizationId String
+  frameworkId    String
+  userId         String
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  framework      Framework        @relation(fields: [frameworkId], references: [id])
+  organization   Organization     @relation(fields: [organizationId], references: [id])
+  user           User             @relation(fields: [userId], references: [id])
+  evidence       Evidence[]
+}
+
+model Evidence {
+  id           String     @id @default(cuid())
+  title        String
+  fileUrl      String
+  assessmentId String
+  createdAt    DateTime   @default(now())
+  assessment   Assessment @relation(fields: [assessmentId], references: [id])
+}
+
+model Recommendation {
+  id          String   @id @default(cuid())
+  title       String
+  description String
+  priority    Int      @default(1)
+  completed   Boolean  @default(false)
+  userId      String
+  createdAt   DateTime @default(now())
+  user        User     @relation(fields: [userId], references: [id])
+}
+
+model Document {
+  id             String       @id @default(cuid())
+  documentType   String
+  fileName       String
+  filePath       String
+  fileSize       Int?
+  mimeType       String?
+  verified       Boolean      @default(false)
+  uploadedAt     DateTime     @default(now())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  action    String
+  entity    String
+  entityId  String
+  userEmail String?
+  timestamp DateTime @default(now())
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  MANAGER
+  AUDITOR
+  USER
+}
+
+enum AssessmentStatus {
+  DRAFT
+  IN_PROGRESS
+  REVIEW
+  COMPLETED
+}
