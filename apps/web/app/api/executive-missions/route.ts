@@ -8,7 +8,13 @@ import {
 } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
-import { verifyToken } from "@/lib/jwt";
+
+import {
+  resolveOrganizationAccess,
+  canReadOrganizationWorkflow,
+  canWriteOrganizationWorkflow,
+  type OrganizationAccessFailureReason,
+} from "@/lib/auth/organizationAccess";
 
 import {
   EXECUTIVE_ACTIONS,
@@ -22,16 +28,41 @@ import {
 
 /*
  * ============================================================
- * TYPES
+ * COMPLIANCEOS EXECUTIVE MISSION API
+ * ============================================================
+ *
+ * SECURITY MODEL
+ *
+ * JWT
+ *   ↓
+ * authenticated user
+ *   ↓
+ * PostgreSQL User
+ *   ↓
+ * active OrganizationMember
+ *   ↓
+ * Organization
+ *   ↓
+ * role authorization
+ *   ↓
+ * Executive Mission
+ *
+ * IMPORTANT
+ *
+ * The organizationId contained inside the JWT is NOT used as
+ * the authoritative tenant boundary.
+ *
+ * Organization access is resolved through
+ * resolveOrganizationAccess(), which verifies the current
+ * database User and active OrganizationMember relationship.
  * ============================================================
  */
 
-type AuthenticatedUser = {
-  id: string;
-  email: string;
-  organizationId?: string | null;
-  role?: string;
-};
+/*
+ * ============================================================
+ * REQUEST TYPES
+ * ============================================================
+ */
 
 type CreateMissionBody = {
   actionId?: unknown;
@@ -47,32 +78,42 @@ type UpdateMissionBody = {
 
 /*
  * ============================================================
- * AUTHENTICATION
+ * ORGANIZATION ACCESS FAILURE RESPONSE
  * ============================================================
  */
 
-function getAuthenticatedUser(
-  req: NextRequest
-): AuthenticatedUser | null {
-  const token =
-    req.cookies.get("token")?.value;
+function organizationAccessFailure(
+  reason: OrganizationAccessFailureReason
+) {
+  const authenticationFailure =
+    reason === "MISSING_TOKEN" ||
+    reason === "INVALID_TOKEN" ||
+    reason === "INVALID_IDENTITY" ||
+    reason === "USER_NOT_FOUND";
 
-  if (!token) {
-    return null;
-  }
+  return NextResponse.json(
+    {
+      success: false,
 
-  try {
-    return verifyToken(
-      token
-    ) as AuthenticatedUser;
-  } catch {
-    return null;
-  }
+      message:
+        authenticationFailure
+          ? "Unauthorized"
+          : "Organisation access denied.",
+
+      reason,
+    },
+    {
+      status:
+        authenticationFailure
+          ? 401
+          : 403,
+    }
+  );
 }
 
 /*
  * ============================================================
- * IDENTITY VALIDATION
+ * EXECUTIVE ACTION VALIDATION
  * ============================================================
  */
 
@@ -81,6 +122,12 @@ function isExecutiveActionId(
 ): value is ExecutiveActionId {
   return value in EXECUTIVE_ACTIONS;
 }
+
+/*
+ * ============================================================
+ * EXECUTIVE WORKFLOW VALIDATION
+ * ============================================================
+ */
 
 function isExecutiveWorkflowId(
   value: string
@@ -95,7 +142,7 @@ function isExecutiveWorkflowId(
 
 /*
  * ============================================================
- * STATUS CONVERSION
+ * CLIENT STATUS SERIALIZATION
  * ============================================================
  */
 
@@ -118,6 +165,12 @@ function toClientStatus(
   }
 }
 
+/*
+ * ============================================================
+ * DATABASE STATUS CONVERSION
+ * ============================================================
+ */
+
 function toDatabaseStatus(
   status: string
 ): ExecutiveMissionStatus | null {
@@ -138,7 +191,7 @@ function toDatabaseStatus(
 
 /*
  * ============================================================
- * SERIALIZATION
+ * MISSION SERIALIZATION
  * ============================================================
  */
 
@@ -190,9 +243,21 @@ function serializeMission(
 /*
  * ============================================================
  * GET
+ * ============================================================
  *
- * Return the current organisation's most recent
- * active or paused Executive Mission.
+ * Returns the current organization's most recent ACTIVE or
+ * PAUSED Executive Mission.
+ *
+ * READ AUTHORITY
+ *
+ * OWNER
+ * ADMIN
+ * MANAGER
+ * AUDITOR
+ * MEMBER
+ *
+ * Tenant identity comes from the authoritative active
+ * OrganizationMember relationship.
  * ============================================================
  */
 
@@ -200,31 +265,56 @@ export async function GET(
   req: NextRequest
 ) {
   try {
-    const user =
-      getAuthenticatedUser(
+    /*
+     * Resolve authenticated organization access.
+     */
+
+    const access =
+      await resolveOrganizationAccess(
         req
       );
 
+    if (!access.authorized) {
+      return organizationAccessFailure(
+        access.reason
+      );
+    }
+
+    /*
+     * Apply workflow read authorization.
+     */
+
     if (
-      !user ||
-      !user.organizationId
+      !canReadOrganizationWorkflow(
+        access.context
+      )
     ) {
       return NextResponse.json(
         {
           success: false,
-          message: "Unauthorized",
+
+          message:
+            "You do not have permission to read Executive Missions.",
         },
         {
-          status: 401,
+          status: 403,
         }
       );
     }
+
+    const {
+      organization,
+    } = access.context;
+
+    /*
+     * Mission lookup is organization-scoped.
+     */
 
     const mission =
       await prisma.executiveMission.findFirst({
         where: {
           organizationId:
-            user.organizationId,
+            organization.id,
 
           status: {
             in: [
@@ -239,6 +329,10 @@ export async function GET(
             "desc",
         },
       });
+
+    /*
+     * No active mission is a valid state.
+     */
 
     if (!mission) {
       return NextResponse.json({
@@ -264,6 +358,7 @@ export async function GET(
     return NextResponse.json(
       {
         success: false,
+
         message:
           "Unable to load Executive Mission.",
       },
@@ -277,14 +372,27 @@ export async function GET(
 /*
  * ============================================================
  * POST
+ * ============================================================
  *
- * Start a new Executive Mission.
+ * Starts a new Executive Mission.
+ *
+ * WRITE AUTHORITY
+ *
+ * OWNER
+ * ADMIN
+ * MANAGER
+ * MEMBER
+ *
+ * AUDITOR is intentionally excluded.
  *
  * The Workflow Registry remains authoritative for:
  *
  * - workflow identity
  * - action identity
- * - route
+ * - workflow route
+ *
+ * Cancellation of an existing mission and creation of the new
+ * mission occur in one database transaction.
  * ============================================================
  */
 
@@ -292,28 +400,62 @@ export async function POST(
   req: NextRequest
 ) {
   try {
-    const user =
-      getAuthenticatedUser(
+    /*
+     * Resolve organization authority.
+     */
+
+    const access =
+      await resolveOrganizationAccess(
         req
       );
 
+    if (!access.authorized) {
+      return organizationAccessFailure(
+        access.reason
+      );
+    }
+
+    /*
+     * Apply write authorization.
+     */
+
     if (
-      !user ||
-      !user.organizationId
+      !canWriteOrganizationWorkflow(
+        access.context
+      )
     ) {
       return NextResponse.json(
         {
           success: false,
-          message: "Unauthorized",
+
+          message:
+            "You do not have permission to start Executive Missions.",
         },
         {
-          status: 401,
+          status: 403,
         }
       );
     }
 
+    const {
+      user,
+      organization,
+    } = access.context;
+
+    /*
+     * Parse request.
+     */
+
     const body =
       await req.json() as CreateMissionBody;
+
+    /*
+     * Validate primitive request values.
+     *
+     * This narrowing happens BEFORE the asynchronous Prisma
+     * transaction so values used by the transaction have
+     * concrete string types.
+     */
 
     if (
       typeof body.actionId !==
@@ -326,6 +468,7 @@ export async function POST(
       return NextResponse.json(
         {
           success: false,
+
           message:
             "Invalid Executive Mission request.",
         },
@@ -335,17 +478,39 @@ export async function POST(
       );
     }
 
+    /*
+     * Copy validated values into concrete local strings.
+     *
+     * This is deliberate. TypeScript does not need to preserve
+     * narrowing of mutable object properties across the
+     * asynchronous transaction callback.
+     */
+
+    const actionId =
+      body.actionId;
+
+    const workflowId =
+      body.workflowId;
+
+    const requestedTitle =
+      body.title;
+
+    /*
+     * Validate registry identities.
+     */
+
     if (
       !isExecutiveActionId(
-        body.actionId
+        actionId
       ) ||
       !isExecutiveWorkflowId(
-        body.workflowId
+        workflowId
       )
     ) {
       return NextResponse.json(
         {
           success: false,
+
           message:
             "Unknown Executive Mission identity.",
         },
@@ -355,25 +520,29 @@ export async function POST(
       );
     }
 
+    /*
+     * Resolve authoritative workflow definition.
+     */
+
     const workflow =
       getExecutiveWorkflow(
-        body.workflowId
+        workflowId
       );
 
     /*
-     * Prevent an action from launching
-     * an unrelated workflow.
+     * Prevent an action from launching an unrelated workflow.
      */
 
     if (
       workflow.actionId !==
-      body.actionId
+      actionId
     ) {
       return NextResponse.json(
         {
           success: false,
+
           message:
-            `Executive action "${body.actionId}" cannot launch workflow "${workflow.id}".`,
+            `Executive action "${actionId}" cannot launch workflow "${workflow.id}".`,
         },
         {
           status: 400,
@@ -382,72 +551,91 @@ export async function POST(
     }
 
     /*
-     * An organisation should have only
-     * one current active mission.
-     *
-     * Previous active/paused missions are
-     * cancelled before the new mission starts.
+     * Resolve mission title BEFORE entering the asynchronous
+     * Prisma transaction.
      */
 
-    await prisma.$transaction(
-      async (tx) => {
-        await tx.executiveMission.updateMany({
-          where: {
-            organizationId:
-              user.organizationId!,
-
-            status: {
-              in: [
-                ExecutiveMissionStatus.ACTIVE,
-                ExecutiveMissionStatus.PAUSED,
-              ],
-            },
-          },
-
-          data: {
-            status:
-              ExecutiveMissionStatus.CANCELLED,
-          },
-        });
-      }
-    );
-
-    const mission =
-      await prisma.executiveMission.create({
-        data: {
-          organizationId:
-            user.organizationId,
-
-          workflowId:
-            workflow.id,
-
-          actionId:
-            workflow.actionId,
-
-          title:
-            body.title.trim() ||
-            workflow.title,
-
-          route:
-            workflow.route,
-
-          status:
-            ExecutiveMissionStatus.ACTIVE,
-
-          progress:
-            0,
-
-          startedByUserId:
-            user.id,
-        },
-      });
+    const missionTitle =
+      requestedTitle.trim() ||
+      workflow.title;
 
     /*
-     * Record the mission launch.
+     * ========================================================
+     * ATOMIC MISSION REPLACEMENT
+     * ========================================================
      *
-     * We intentionally use only fields
-     * guaranteed by the current AuditLog
-     * Prisma model.
+     * The old active mission is cancelled and the replacement
+     * is created in the SAME transaction.
+     *
+     * If mission creation fails, cancellation is rolled back.
+     * ========================================================
+     */
+
+    const mission =
+      await prisma.$transaction(
+        async (tx) => {
+          /*
+           * Cancel previous active/paused missions belonging
+           * ONLY to this organization.
+           */
+
+          await tx.executiveMission.updateMany({
+            where: {
+              organizationId:
+                organization.id,
+
+              status: {
+                in: [
+                  ExecutiveMissionStatus.ACTIVE,
+                  ExecutiveMissionStatus.PAUSED,
+                ],
+              },
+            },
+
+            data: {
+              status:
+                ExecutiveMissionStatus.CANCELLED,
+            },
+          });
+
+          /*
+           * Create replacement mission.
+           */
+
+          return tx.executiveMission.create({
+            data: {
+              organizationId:
+                organization.id,
+
+              workflowId:
+                workflow.id,
+
+              actionId:
+                workflow.actionId,
+
+              title:
+                missionTitle,
+
+              route:
+                workflow.route,
+
+              status:
+                ExecutiveMissionStatus.ACTIVE,
+
+              progress:
+                0,
+
+              startedByUserId:
+                user.id,
+            },
+          });
+        }
+      );
+
+    /*
+     * ========================================================
+     * AUDIT TRAIL
+     * ========================================================
      */
 
     await prisma.auditLog.create({
@@ -488,6 +676,7 @@ export async function POST(
     return NextResponse.json(
       {
         success: false,
+
         message:
           "Unable to start Executive Mission.",
       },
@@ -501,8 +690,26 @@ export async function POST(
 /*
  * ============================================================
  * PATCH
+ * ============================================================
  *
- * Update mission progress or mission status.
+ * Updates mission progress and/or status.
+ *
+ * Mission lookup is constrained by BOTH:
+ *
+ * mission ID
+ * organization ID
+ *
+ * This prevents possession of another tenant's mission ID from
+ * becoming an authorization bypass.
+ *
+ * WRITE AUTHORITY
+ *
+ * OWNER
+ * ADMIN
+ * MANAGER
+ * MEMBER
+ *
+ * AUDITOR is intentionally excluded.
  * ============================================================
  */
 
@@ -510,36 +717,68 @@ export async function PATCH(
   req: NextRequest
 ) {
   try {
-    const user =
-      getAuthenticatedUser(
+    /*
+     * Resolve organization authority.
+     */
+
+    const access =
+      await resolveOrganizationAccess(
         req
       );
 
+    if (!access.authorized) {
+      return organizationAccessFailure(
+        access.reason
+      );
+    }
+
+    /*
+     * Apply write authorization.
+     */
+
     if (
-      !user ||
-      !user.organizationId
+      !canWriteOrganizationWorkflow(
+        access.context
+      )
     ) {
       return NextResponse.json(
         {
           success: false,
-          message: "Unauthorized",
+
+          message:
+            "You do not have permission to modify Executive Missions.",
         },
         {
-          status: 401,
+          status: 403,
         }
       );
     }
 
+    const {
+      organization,
+    } = access.context;
+
+    /*
+     * Parse request.
+     */
+
     const body =
       await req.json() as UpdateMissionBody;
 
+    /*
+     * Mission ID is mandatory.
+     */
+
     if (
       typeof body.missionId !==
-      "string"
+        "string" ||
+      body.missionId.trim().length ===
+        0
     ) {
       return NextResponse.json(
         {
           success: false,
+
           message:
             "Mission ID is required.",
         },
@@ -549,14 +788,26 @@ export async function PATCH(
       );
     }
 
+    const missionId =
+      body.missionId.trim();
+
+    /*
+     * ========================================================
+     * TENANT-SCOPED MISSION LOOKUP
+     * ========================================================
+     *
+     * Never authorize an update using missionId alone.
+     * ========================================================
+     */
+
     const existingMission =
       await prisma.executiveMission.findFirst({
         where: {
           id:
-            body.missionId,
+            missionId,
 
           organizationId:
-            user.organizationId,
+            organization.id,
         },
       });
 
@@ -564,6 +815,7 @@ export async function PATCH(
       return NextResponse.json(
         {
           success: false,
+
           message:
             "Executive Mission not found.",
         },
@@ -579,6 +831,12 @@ export async function PATCH(
     let status:
       ExecutiveMissionStatus | undefined;
 
+    /*
+     * ========================================================
+     * PROGRESS VALIDATION
+     * ========================================================
+     */
+
     if (
       body.progress !==
       undefined
@@ -593,6 +851,7 @@ export async function PATCH(
         return NextResponse.json(
           {
             success: false,
+
             message:
               "Mission progress must be a number.",
           },
@@ -601,6 +860,10 @@ export async function PATCH(
           }
         );
       }
+
+      /*
+       * Normalize progress to integer range 0–100.
+       */
 
       progress =
         Math.min(
@@ -613,11 +876,22 @@ export async function PATCH(
           )
         );
 
+      /*
+       * Progress reaching 100 automatically completes the
+       * mission.
+       */
+
       status =
         progress >= 100
           ? ExecutiveMissionStatus.COMPLETED
           : ExecutiveMissionStatus.ACTIVE;
     }
+
+    /*
+     * ========================================================
+     * STATUS VALIDATION
+     * ========================================================
+     */
 
     if (
       body.status !==
@@ -625,11 +899,12 @@ export async function PATCH(
     ) {
       if (
         typeof body.status !==
-        "string"
+          "string"
       ) {
         return NextResponse.json(
           {
             success: false,
+
             message:
               "Invalid mission status.",
           },
@@ -648,6 +923,7 @@ export async function PATCH(
         return NextResponse.json(
           {
             success: false,
+
             message:
               "Unsupported mission status.",
           },
@@ -662,7 +938,7 @@ export async function PATCH(
     }
 
     /*
-     * Completion always means 100%.
+     * A completed mission must always represent 100%.
      */
 
     if (
@@ -671,6 +947,12 @@ export async function PATCH(
     ) {
       progress = 100;
     }
+
+    /*
+     * ========================================================
+     * DATABASE UPDATE
+     * ========================================================
+     */
 
     const mission =
       await prisma.executiveMission.update({
@@ -717,6 +999,7 @@ export async function PATCH(
     return NextResponse.json(
       {
         success: false,
+
         message:
           "Unable to update Executive Mission.",
       },
@@ -730,8 +1013,19 @@ export async function PATCH(
 /*
  * ============================================================
  * DELETE
+ * ============================================================
  *
- * Cancel the current mission.
+ * Cancels the organization's current active/paused Executive
+ * Missions.
+ *
+ * WRITE AUTHORITY
+ *
+ * OWNER
+ * ADMIN
+ * MANAGER
+ * MEMBER
+ *
+ * AUDITOR is intentionally excluded.
  * ============================================================
  */
 
@@ -739,30 +1033,55 @@ export async function DELETE(
   req: NextRequest
 ) {
   try {
-    const user =
-      getAuthenticatedUser(
+    /*
+     * Resolve organization authority.
+     */
+
+    const access =
+      await resolveOrganizationAccess(
         req
       );
 
+    if (!access.authorized) {
+      return organizationAccessFailure(
+        access.reason
+      );
+    }
+
+    /*
+     * Apply write authorization.
+     */
+
     if (
-      !user ||
-      !user.organizationId
+      !canWriteOrganizationWorkflow(
+        access.context
+      )
     ) {
       return NextResponse.json(
         {
           success: false,
-          message: "Unauthorized",
+
+          message:
+            "You do not have permission to cancel Executive Missions.",
         },
         {
-          status: 401,
+          status: 403,
         }
       );
     }
 
+    const {
+      organization,
+    } = access.context;
+
+    /*
+     * Cancel missions ONLY inside the resolved organization.
+     */
+
     await prisma.executiveMission.updateMany({
       where: {
         organizationId:
-          user.organizationId,
+          organization.id,
 
         status: {
           in: [
@@ -790,6 +1109,7 @@ export async function DELETE(
     return NextResponse.json(
       {
         success: false,
+
         message:
           "Unable to clear Executive Mission.",
       },

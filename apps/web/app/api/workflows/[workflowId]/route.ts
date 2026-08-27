@@ -1,7 +1,16 @@
-import { NextRequest, NextResponse } from "next/server";
+import {
+  NextRequest,
+  NextResponse,
+} from "next/server";
 
 import { prisma } from "@/lib/prisma";
-import { getCurrentUser } from "@/lib/session";
+
+import {
+  canReadOrganizationWorkflow,
+  canWriteOrganizationWorkflow,
+  resolveOrganizationAccess,
+  type OrganizationAccessFailureReason,
+} from "@/lib/auth/organizationAccess";
 
 /*
  * ============================================================
@@ -9,17 +18,20 @@ import { getCurrentUser } from "@/lib/session";
  * ============================================================
  */
 
-const VALID_WORKFLOW_IDS = new Set<string>([
-  "governance",
-  "compliance",
-  "funding",
-  "procurement",
-]);
+const VALID_WORKFLOW_IDS =
+  new Set<string>([
+    "governance",
+    "compliance",
+    "funding",
+    "procurement",
+  ]);
 
 function isValidWorkflowId(
   workflowId: string
 ): boolean {
-  return VALID_WORKFLOW_IDS.has(workflowId);
+  return VALID_WORKFLOW_IDS.has(
+    workflowId
+  );
 }
 
 function normalizeProgress(
@@ -36,12 +48,50 @@ function normalizeProgress(
 
 /*
  * ============================================================
+ * AUTHORIZATION FAILURE RESPONSE
+ * ============================================================
+ */
+
+function organizationAccessFailure(
+  reason:
+    OrganizationAccessFailureReason
+) {
+  const authenticationFailure =
+    reason === "MISSING_TOKEN" ||
+    reason === "INVALID_TOKEN" ||
+    reason === "INVALID_IDENTITY" ||
+    reason === "USER_NOT_FOUND";
+
+  return NextResponse.json(
+    {
+      success: false,
+
+      message:
+        authenticationFailure
+          ? "Unauthorized"
+          : "Organisation access denied.",
+
+      reason,
+    },
+
+    {
+      status:
+        authenticationFailure
+          ? 401
+          : 403,
+    }
+  );
+}
+
+/*
+ * ============================================================
  * GET WORKFLOW PROGRESS
  * ============================================================
  */
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
+
   context: {
     params: Promise<{
       workflowId: string;
@@ -50,40 +100,68 @@ export async function GET(
 ) {
   try {
     /*
-     * Resolve authenticated user.
+     * ========================================================
+     * AUTHENTICATION + ORGANISATION AUTHORIZATION
+     * ========================================================
      *
-     * Organisation identity is determined by
-     * server-side authentication state.
+     * JWT proves identity.
+     *
+     * PostgreSQL OrganizationMember proves
+     * organisation access.
      */
 
-    const user = await getCurrentUser();
+    const access =
+      await resolveOrganizationAccess(
+        req
+      );
 
-    if (!user) {
+    if (!access.authorized) {
+      return organizationAccessFailure(
+        access.reason
+      );
+    }
+
+    if (
+      !canReadOrganizationWorkflow(
+        access.context
+      )
+    ) {
       return NextResponse.json(
         {
           success: false,
-          message: "Unauthorized",
+
+          message:
+            "You do not have permission to read organisation workflows.",
         },
+
         {
-          status: 401,
+          status: 403,
         }
       );
     }
 
     /*
-     * Resolve workflow ID.
+     * ========================================================
+     * WORKFLOW IDENTITY
+     * ========================================================
      */
 
     const {
       workflowId,
     } = await context.params;
 
-    if (!isValidWorkflowId(workflowId)) {
+    if (
+      !isValidWorkflowId(
+        workflowId
+      )
+    ) {
       return NextResponse.json(
         {
           success: false,
-          message: "Invalid workflow.",
+          message:
+            "Invalid workflow.",
         },
+
         {
           status: 400,
         }
@@ -91,8 +169,12 @@ export async function GET(
     }
 
     /*
-     * Load workflow progress belonging only
-     * to the authenticated organisation.
+     * ========================================================
+     * LOAD WORKFLOW PROGRESS
+     * ========================================================
+     *
+     * The organisation boundary comes from
+     * verified active membership.
      */
 
     const progress =
@@ -100,7 +182,7 @@ export async function GET(
         where: {
           organizationId_workflowId: {
             organizationId:
-              user.organizationId,
+              access.context.organization.id,
 
             workflowId,
           },
@@ -120,9 +202,11 @@ export async function GET(
     return NextResponse.json(
       {
         success: false,
+
         message:
           "Unable to load workflow progress.",
       },
+
       {
         status: 500,
       }
@@ -138,6 +222,7 @@ export async function GET(
 
 export async function PUT(
   req: NextRequest,
+
   context: {
     params: Promise<{
       workflowId: string;
@@ -146,37 +231,63 @@ export async function PUT(
 ) {
   try {
     /*
-     * Resolve authenticated user.
+     * ========================================================
+     * AUTHENTICATION + ORGANISATION AUTHORIZATION
+     * ========================================================
      */
 
-    const user = await getCurrentUser();
+    const access =
+      await resolveOrganizationAccess(
+        req
+      );
 
-    if (!user) {
+    if (!access.authorized) {
+      return organizationAccessFailure(
+        access.reason
+      );
+    }
+
+    if (
+      !canWriteOrganizationWorkflow(
+        access.context
+      )
+    ) {
       return NextResponse.json(
         {
           success: false,
-          message: "Unauthorized",
+
+          message:
+            "You do not have permission to modify organisation workflows.",
         },
+
         {
-          status: 401,
+          status: 403,
         }
       );
     }
 
     /*
-     * Resolve workflow ID.
+     * ========================================================
+     * WORKFLOW IDENTITY
+     * ========================================================
      */
 
     const {
       workflowId,
     } = await context.params;
 
-    if (!isValidWorkflowId(workflowId)) {
+    if (
+      !isValidWorkflowId(
+        workflowId
+      )
+    ) {
       return NextResponse.json(
         {
           success: false,
-          message: "Invalid workflow.",
+          message:
+            "Invalid workflow.",
         },
+
         {
           status: 400,
         }
@@ -184,7 +295,9 @@ export async function PUT(
     }
 
     /*
-     * Parse request body as untrusted input.
+     * ========================================================
+     * PARSE UNTRUSTED REQUEST BODY
+     * ========================================================
      */
 
     const body: unknown =
@@ -197,9 +310,11 @@ export async function PUT(
       return NextResponse.json(
         {
           success: false,
+
           message:
             "Invalid request body.",
         },
+
         {
           status: 400,
         }
@@ -207,17 +322,15 @@ export async function PUT(
     }
 
     const input =
-      body as Record<string, unknown>;
+      body as Record<
+        string,
+        unknown
+      >;
 
     /*
      * ========================================================
      * VALIDATE COMPLETED STEP IDS
      * ========================================================
-     *
-     * Browser input must never be passed directly
-     * into Prisma.
-     *
-     * Only non-empty strings are accepted.
      */
 
     let completedStepIds:
@@ -234,7 +347,8 @@ export async function PUT(
           (
             value: unknown
           ): value is string =>
-            typeof value === "string" &&
+            typeof value ===
+              "string" &&
             value.trim().length > 0
         );
 
@@ -250,9 +364,11 @@ export async function PUT(
       return NextResponse.json(
         {
           success: false,
+
           message:
             "completedStepIds must be an array.",
         },
+
         {
           status: 400,
         }
@@ -266,31 +382,35 @@ export async function PUT(
      */
 
     const requestedProgress =
-      typeof input.progress === "number" &&
-      Number.isFinite(input.progress)
+      typeof input.progress ===
+        "number" &&
+      Number.isFinite(
+        input.progress
+      )
         ? normalizeProgress(
             input.progress
           )
         : 0;
 
     /*
-     * Workflow completion can be explicitly
-     * requested or inferred from 100% progress.
+     * Workflow completion may be explicitly
+     * requested or inferred from 100%.
      */
 
     const completed =
       input.completed === true ||
       requestedProgress >= 100;
 
-    const now = new Date();
+    const now =
+      new Date();
 
     /*
      * ========================================================
      * PERSIST WORKFLOW PROGRESS
      * ========================================================
      *
-     * organizationId + workflowId forms the
-     * organisation-scoped unique boundary.
+     * organizationId now comes exclusively from
+     * verified OrganizationMember access.
      */
 
     const progress =
@@ -298,7 +418,7 @@ export async function PUT(
         where: {
           organizationId_workflowId: {
             organizationId:
-              user.organizationId,
+              access.context.organization.id,
 
             workflowId,
           },
@@ -306,7 +426,7 @@ export async function PUT(
 
         create: {
           organizationId:
-            user.organizationId,
+            access.context.organization.id,
 
           workflowId,
 
@@ -345,17 +465,6 @@ export async function PUT(
      * ========================================================
      * AUDIT TRAIL
      * ========================================================
-     *
-     * Keep this compatible with the CURRENT
-     * AuditLog database model:
-     *
-     * action
-     * entity
-     * entityId
-     * userEmail
-     *
-     * Additional structured audit fields can
-     * be introduced in a later migration.
      */
 
     await prisma.auditLog.create({
@@ -370,13 +479,9 @@ export async function PUT(
           progress.id,
 
         userEmail:
-          user.email,
+          access.context.user.email,
       },
     });
-
-    /*
-     * Return persisted state.
-     */
 
     return NextResponse.json({
       success: true,
@@ -391,9 +496,11 @@ export async function PUT(
     return NextResponse.json(
       {
         success: false,
+
         message:
           "Unable to update workflow progress.",
       },
+
       {
         status: 500,
       }
@@ -408,7 +515,8 @@ export async function PUT(
  */
 
 export async function DELETE(
-  _req: NextRequest,
+  req: NextRequest,
+
   context: {
     params: Promise<{
       workflowId: string;
@@ -417,37 +525,64 @@ export async function DELETE(
 ) {
   try {
     /*
-     * Resolve authenticated user.
+     * ========================================================
+     * AUTHENTICATION + ORGANISATION AUTHORIZATION
+     * ========================================================
      */
 
-    const user = await getCurrentUser();
+    const access =
+      await resolveOrganizationAccess(
+        req
+      );
 
-    if (!user) {
+    if (!access.authorized) {
+      return organizationAccessFailure(
+        access.reason
+      );
+    }
+
+    if (
+      !canWriteOrganizationWorkflow(
+        access.context
+      )
+    ) {
       return NextResponse.json(
         {
           success: false,
-          message: "Unauthorized",
+
+          message:
+            "You do not have permission to reset organisation workflows.",
         },
+
         {
-          status: 401,
+          status: 403,
         }
       );
     }
 
     /*
-     * Resolve workflow ID.
+     * ========================================================
+     * WORKFLOW IDENTITY
+     * ========================================================
      */
 
     const {
       workflowId,
     } = await context.params;
 
-    if (!isValidWorkflowId(workflowId)) {
+    if (
+      !isValidWorkflowId(
+        workflowId
+      )
+    ) {
       return NextResponse.json(
         {
           success: false,
-          message: "Invalid workflow.",
+
+          message:
+            "Invalid workflow.",
         },
+
         {
           status: 400,
         }
@@ -455,8 +590,9 @@ export async function DELETE(
     }
 
     /*
-     * Locate workflow state inside the
-     * authenticated organisation boundary.
+     * ========================================================
+     * LOCATE WORKFLOW STATE
+     * ========================================================
      */
 
     const existing =
@@ -464,7 +600,7 @@ export async function DELETE(
         where: {
           organizationId_workflowId: {
             organizationId:
-              user.organizationId,
+              access.context.organization.id,
 
             workflowId,
           },
@@ -472,8 +608,7 @@ export async function DELETE(
       });
 
     /*
-     * If the workflow has never been started,
-     * reset is still considered successful.
+     * Reset is intentionally idempotent.
      */
 
     if (!existing) {
@@ -483,7 +618,9 @@ export async function DELETE(
     }
 
     /*
-     * Delete persisted workflow progress.
+     * ========================================================
+     * DELETE WORKFLOW PROGRESS
+     * ========================================================
      */
 
     await prisma.workflowProgress.delete({
@@ -494,8 +631,9 @@ export async function DELETE(
     });
 
     /*
-     * Record the reset operation using fields
-     * supported by the current AuditLog model.
+     * ========================================================
+     * AUDIT TRAIL
+     * ========================================================
      */
 
     await prisma.auditLog.create({
@@ -510,7 +648,7 @@ export async function DELETE(
           existing.id,
 
         userEmail:
-          user.email,
+          access.context.user.email,
       },
     });
 
@@ -526,9 +664,11 @@ export async function DELETE(
     return NextResponse.json(
       {
         success: false,
+
         message:
           "Unable to reset workflow progress.",
       },
+
       {
         status: 500,
       }
