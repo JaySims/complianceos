@@ -58,6 +58,30 @@ model Framework {
   description String?
   createdAt   DateTime     @default(now())
   assessments Assessment[]
+
+  requirements ComplianceRequirement[]
+}
+
+model ComplianceRequirement {
+  id          String                        @id @default(cuid())
+  code        String                        @unique
+  title       String
+  description String?
+  category    ComplianceRequirementCategory
+  authority   String?
+  mandatory   Boolean                       @default(true)
+  weight      Float                         @default(1)
+  active      Boolean                       @default(true)
+  frameworkId String
+  createdAt   DateTime                      @default(now())
+  updatedAt   DateTime                      @updatedAt
+
+  framework Framework  @relation(fields: [frameworkId], references: [id], onDelete: Cascade)
+  evidence  Evidence[]
+
+  @@index([frameworkId])
+  @@index([category])
+  @@index([active])
 }
 
 model Assessment {
@@ -77,12 +101,27 @@ model Assessment {
 }
 
 model Evidence {
-  id           String     @id @default(cuid())
-  title        String
-  fileUrl      String
-  assessmentId String
-  createdAt    DateTime   @default(now())
-  assessment   Assessment @relation(fields: [assessmentId], references: [id])
+  id            String                     @id @default(cuid())
+  title         String
+  fileUrl       String
+  assessmentId  String
+  documentId    String?
+  requirementId String?
+  status        EvidenceVerificationStatus @default(PENDING)
+  verifiedAt    DateTime?
+  verifiedById  String?
+  notes         String?
+  createdAt     DateTime                   @default(now())
+  updatedAt     DateTime                   @updatedAt
+
+  assessment  Assessment             @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  document    Document?              @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  requirement ComplianceRequirement? @relation(fields: [requirementId], references: [id], onDelete: SetNull)
+
+  @@index([assessmentId])
+  @@index([documentId])
+  @@index([requirementId])
+  @@index([status])
 }
 
 model Recommendation {
@@ -97,16 +136,28 @@ model Recommendation {
 }
 
 model Document {
-  id             String       @id @default(cuid())
+  id             String                     @id @default(cuid())
   documentType   String
   fileName       String
   filePath       String
   fileSize       Int?
   mimeType       String?
-  verified       Boolean      @default(false)
-  uploadedAt     DateTime     @default(now())
+  verified       Boolean                    @default(false)
+  status         DocumentVerificationStatus @default(PENDING)
+  issuedAt       DateTime?
+  expiresAt      DateTime?
+  verifiedAt     DateTime?
+  verifiedById   String?
+  uploadedAt     DateTime                   @default(now())
+  updatedAt      DateTime                   @updatedAt
   organizationId String
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  evidence     Evidence[]
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([expiresAt])
 }
 
 model AuditLog {
@@ -206,4 +257,30 @@ enum ExecutiveMissionStatus {
   PAUSED
   COMPLETED
   CANCELLED
+}
+
+enum DocumentVerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+  EXPIRED
+}
+
+enum EvidenceVerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+  EXPIRED
+}
+
+enum ComplianceRequirementCategory {
+  GOVERNANCE
+  TAX
+  LABOUR
+  DATA_PROTECTION
+  TRANSFORMATION
+  INDUSTRY
+  FINANCIAL
+  PROCUREMENT
+  OTHER
 }
