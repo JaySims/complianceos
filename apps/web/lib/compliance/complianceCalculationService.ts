@@ -1,3 +1,7 @@
+import {
+  Prisma,
+} from "@prisma/client";
+
 import { prisma } from "@/lib/prisma";
 
 import {
@@ -45,6 +49,22 @@ import {
  * therefore not an integrity violation; it is simply excluded
  * from the current score.
  *
+ * DATABASE CLIENT BOUNDARY
+ *
+ * By default this service uses the global Prisma client and
+ * remains a normal read-only calculation service.
+ *
+ * A Prisma.TransactionClient may be supplied by a trusted
+ * server-side caller when the calculation must participate in
+ * the caller's existing database transaction.
+ *
+ * This does NOT alter:
+ *
+ * - scoring mathematics;
+ * - evidence integrity rules;
+ * - tenant ownership rules;
+ * - active Requirement semantics.
+ *
  * CURRENT BEHAVIOR
  *
  * READ ONLY.
@@ -80,10 +100,30 @@ export type ComplianceCalculationResult =
   | {
       success: false;
 
-      reason: ComplianceCalculationFailureReason;
+      reason:
+        ComplianceCalculationFailureReason;
 
       message: string;
     };
+
+/*
+ * ============================================================
+ * DATABASE READ CLIENT
+ * ============================================================
+ *
+ * The calculation requires only delegates available on both:
+ *
+ * - PrismaClient;
+ * - Prisma.TransactionClient.
+ *
+ * The global Prisma client is used unless an existing
+ * transaction client is explicitly supplied.
+ * ============================================================
+ */
+
+type ComplianceCalculationClient =
+  | typeof prisma
+  | Prisma.TransactionClient;
 
 /*
  * ============================================================
@@ -94,7 +134,9 @@ export type ComplianceCalculationResult =
 export async function calculateAssessmentCompliance(
   organizationId: string,
   assessmentId: string,
-  now: Date = new Date()
+  now: Date = new Date(),
+  database: ComplianceCalculationClient =
+    prisma
 ): Promise<ComplianceCalculationResult> {
   /*
    * ----------------------------------------------------------
@@ -103,7 +145,7 @@ export async function calculateAssessmentCompliance(
    */
 
   const assessment =
-    await prisma.assessment.findUnique({
+    await database.assessment.findUnique({
       where: {
         id: assessmentId,
       },
@@ -119,7 +161,8 @@ export async function calculateAssessmentCompliance(
     return {
       success: false,
 
-      reason: "ASSESSMENT_NOT_FOUND",
+      reason:
+        "ASSESSMENT_NOT_FOUND",
 
       message:
         "Compliance assessment not found.",
@@ -139,7 +182,8 @@ export async function calculateAssessmentCompliance(
     return {
       success: false,
 
-      reason: "ASSESSMENT_ACCESS_DENIED",
+      reason:
+        "ASSESSMENT_ACCESS_DENIED",
 
       message:
         "Compliance assessment does not belong to the authorized organisation.",
@@ -158,7 +202,7 @@ export async function calculateAssessmentCompliance(
    */
 
   const frameworkRequirements =
-    await prisma.complianceRequirement.findMany({
+    await database.complianceRequirement.findMany({
       where: {
         frameworkId:
           assessment.frameworkId,
@@ -212,7 +256,7 @@ export async function calculateAssessmentCompliance(
    */
 
   const evidence =
-    await prisma.evidence.findMany({
+    await database.evidence.findMany({
       where: {
         assessmentId:
           assessment.id,
