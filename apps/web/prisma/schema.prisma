@@ -27,22 +27,23 @@ model User {
 }
 
 model Organization {
-  id                  String       @id @default(cuid())
-  name                String
-  tradingName         String?
-  registrationNumber  String?      @unique
-  website             String?
-  industry            String?
-  country             String?
-  employeeCount       Int?
-  trustScore          Float        @default(0)
-  complianceScore     Float        @default(0)
-  onboardingCompleted Boolean      @default(false)
-  createdAt           DateTime     @default(now())
-  updatedAt           DateTime     @updatedAt
-  assessments         Assessment[]
-  documents           Document[]
-  users               User[]       @relation("PrimaryOrganizationUsers")
+  id                           String                       @id @default(cuid())
+  name                         String
+  tradingName                  String?
+  registrationNumber           String?                      @unique
+  website                      String?
+  industry                     String?
+  country                      String?
+  employeeCount                Int?
+  trustScore                   Float                        @default(0)
+  complianceScore              Float                        @default(0)
+  onboardingCompleted          Boolean                      @default(false)
+  createdAt                    DateTime                     @default(now())
+  updatedAt                    DateTime                     @updatedAt
+  assessments                  Assessment[]
+  currentAssessmentAuthorities CurrentAssessmentAuthority[]
+  documents                    Document[]
+  users                        User[]                       @relation("PrimaryOrganizationUsers")
 
   members OrganizationMember[]
 
@@ -52,12 +53,13 @@ model Organization {
 }
 
 model Framework {
-  id          String       @id @default(cuid())
-  name        String
-  version     String?
-  description String?
-  createdAt   DateTime     @default(now())
-  assessments Assessment[]
+  id                           String                       @id @default(cuid())
+  name                         String
+  version                      String?
+  description                  String?
+  createdAt                    DateTime                     @default(now())
+  assessments                  Assessment[]
+  currentAssessmentAuthorities CurrentAssessmentAuthority[]
 
   requirements ComplianceRequirement[]
 }
@@ -85,19 +87,37 @@ model ComplianceRequirement {
 }
 
 model Assessment {
-  id             String           @id @default(cuid())
-  title          String
-  score          Float?
-  status         AssessmentStatus @default(DRAFT)
+  id               String                      @id @default(cuid())
+  title            String
+  score            Float?
+  status           AssessmentStatus            @default(DRAFT)
+  organizationId   String
+  frameworkId      String
+  userId           String
+  createdAt        DateTime                    @default(now())
+  updatedAt        DateTime                    @updatedAt
+  framework        Framework                   @relation(fields: [frameworkId], references: [id])
+  organization     Organization                @relation(fields: [organizationId], references: [id])
+  user             User                        @relation(fields: [userId], references: [id])
+  evidence         Evidence[]
+  currentAuthority CurrentAssessmentAuthority?
+}
+
+model CurrentAssessmentAuthority {
+  id             String   @id @default(cuid())
   organizationId String
   frameworkId    String
-  userId         String
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
-  framework      Framework        @relation(fields: [frameworkId], references: [id])
-  organization   Organization     @relation(fields: [organizationId], references: [id])
-  user           User             @relation(fields: [userId], references: [id])
-  evidence       Evidence[]
+  assessmentId   String   @unique
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  framework    Framework    @relation(fields: [frameworkId], references: [id], onDelete: Cascade)
+  assessment   Assessment   @relation(fields: [assessmentId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, frameworkId])
+  @@index([organizationId])
+  @@index([frameworkId])
 }
 
 model Evidence {
