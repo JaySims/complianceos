@@ -11,11 +11,88 @@ import {
 } from "@/lib/compliance/evidenceMutationService";
 
 import {
+  listAssessmentComplianceEvidence,
+} from "@/lib/compliance/evidenceQueryService";
+
+import {
   evidenceMutationHttpResponse,
   evidenceOrganizationAccessFailure,
   invalidEvidenceRequest,
   validateCreateEvidenceHttpInput,
 } from "@/lib/compliance/evidenceHttp";
+
+import {
+  evidenceCollectionQueryHttpResponse,
+} from "@/lib/compliance/evidenceQueryHttp";
+
+
+/*
+ * ============================================================
+ * GET /api/compliance/evidence
+ * ============================================================
+ *
+ * Returns Compliance Evidence for one Assessment inside the
+ * authenticated user's authoritative organization.
+ *
+ * Query contract:
+ *
+ *   ?assessmentId=<assessmentId>
+ *
+ * HTTP owns:
+ * - authentication entry;
+ * - query parameter extraction;
+ * - basic identifier validation;
+ * - response translation.
+ *
+ * Query service owns:
+ * - read-role authorization;
+ * - Assessment ownership;
+ * - Evidence tenant integrity;
+ * - Requirement framework integrity;
+ * - safe relational projection.
+ *
+ * Organization identity is never accepted from query params.
+ * ============================================================
+ */
+
+export async function GET(
+  req: NextRequest
+) {
+  const access =
+    await resolveOrganizationAccess(
+      req
+    );
+
+  if (!access.authorized) {
+    return evidenceOrganizationAccessFailure(
+      access.reason
+    );
+  }
+
+  const assessmentId =
+    req.nextUrl.searchParams.get(
+      "assessmentId"
+    );
+
+  if (
+    typeof assessmentId !== "string" ||
+    assessmentId.trim().length === 0
+  ) {
+    return invalidEvidenceRequest(
+      "assessmentId is required."
+    );
+  }
+
+  const result =
+    await listAssessmentComplianceEvidence(
+      access.context,
+      assessmentId.trim()
+    );
+
+  return evidenceCollectionQueryHttpResponse(
+    result
+  );
+}
 
 
 /*
