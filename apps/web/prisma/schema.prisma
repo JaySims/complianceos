@@ -65,18 +65,22 @@ model Framework {
 }
 
 model ComplianceRequirement {
-  id          String                        @id @default(cuid())
-  code        String                        @unique
-  title       String
-  description String?
-  category    ComplianceRequirementCategory
-  authority   String?
-  mandatory   Boolean                       @default(true)
-  weight      Float                         @default(1)
-  active      Boolean                       @default(true)
-  frameworkId String
-  createdAt   DateTime                      @default(now())
-  updatedAt   DateTime                      @updatedAt
+  id              String                        @id @default(cuid())
+  code            String                        @unique
+  title           String
+  description     String?
+  category        ComplianceRequirementCategory
+  authority       String?
+  sourceTitle     String?
+  sourceReference String?
+  sourceUrl       String?
+  effectiveFrom   DateTime?
+  mandatory       Boolean                       @default(true)
+  weight          Float                         @default(1)
+  active          Boolean                       @default(true)
+  frameworkId     String
+  createdAt       DateTime                      @default(now())
+  updatedAt       DateTime                      @updatedAt
 
   framework Framework  @relation(fields: [frameworkId], references: [id], onDelete: Cascade)
   evidence  Evidence[]
