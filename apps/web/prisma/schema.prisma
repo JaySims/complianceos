@@ -23,7 +23,18 @@ model User {
 
   memberships OrganizationMember[]
 
-  executiveMissions ExecutiveMission[] @relation("MissionStartedBy")
+  executiveMissions                                      ExecutiveMission[]                           @relation("MissionStartedBy")
+  regulatoryFactValuesEstablished                        RegulatoryFactValue[]                        @relation("RegulatoryFactEstablishedBy")
+  regulatoryFactValuesReviewed                           RegulatoryFactValue[]                        @relation("RegulatoryFactReviewedBy")
+  currentFactAuthoritiesEstablished                      CurrentRegulatoryFactAuthority[]             @relation("CurrentRegulatoryFactAuthorityEstablishedBy")
+  regulatoryFactAuthorityTransitionsEstablished          RegulatoryFactAuthorityTransition[]          @relation("RegulatoryFactAuthorityTransitionEstablishedBy")
+  applicabilityDefinitionsApproved                       ApplicabilityDefinition[]                    @relation("ApplicabilityDefinitionApprovedBy")
+  currentApplicabilityDefinitionsEstablished             CurrentApplicabilityDefinitionAuthority[]    @relation("CurrentApplicabilityDefinitionAuthorityEstablishedBy")
+  applicabilityDefinitionAuthorityTransitionsEstablished ApplicabilityDefinitionAuthorityTransition[] @relation("ApplicabilityDefinitionAuthorityTransitionEstablishedBy")
+  applicabilityRevisionsResolved                         AssessmentRequirementApplicabilityRevision[] @relation("ApplicabilityRevisionResolvedBy")
+  applicabilityRevisionsReviewed                         AssessmentRequirementApplicabilityRevision[] @relation("ApplicabilityRevisionReviewedBy")
+  currentApplicabilityResolutionsEstablished             CurrentApplicabilityResolutionAuthority[]    @relation("CurrentApplicabilityResolutionAuthorityEstablishedBy")
+  applicabilityResolutionAuthorityTransitionsEstablished ApplicabilityResolutionAuthorityTransition[] @relation("ApplicabilityResolutionAuthorityTransitionEstablishedBy")
 }
 
 model Organization {
@@ -49,7 +60,9 @@ model Organization {
 
   workflowProgress WorkflowProgress[]
 
-  executiveMissions ExecutiveMission[]
+  executiveMissions     ExecutiveMission[]
+  regulatoryFacts       RegulatoryFact[]
+  applicabilityContexts ApplicabilityContext[]
 }
 
 model Framework {
@@ -61,7 +74,9 @@ model Framework {
   assessments                  Assessment[]
   currentAssessmentAuthorities CurrentAssessmentAuthority[]
 
-  requirements ComplianceRequirement[]
+  requirements              ComplianceRequirement[]
+  regulatoryFactDefinitions RegulatoryFactDefinition[]
+  applicabilityContexts     ApplicabilityContext[]
 }
 
 model ComplianceRequirement {
@@ -82,8 +97,12 @@ model ComplianceRequirement {
   createdAt       DateTime                      @default(now())
   updatedAt       DateTime                      @updatedAt
 
-  framework Framework  @relation(fields: [frameworkId], references: [id], onDelete: Cascade)
-  evidence  Evidence[]
+  framework                                   Framework                                    @relation(fields: [frameworkId], references: [id], onDelete: Cascade)
+  evidence                                    Evidence[]
+  applicabilityDefinitions                    ApplicabilityDefinition[]
+  currentApplicabilityAuthority               CurrentApplicabilityDefinitionAuthority?
+  assessmentApplicability                     AssessmentRequirementApplicability[]
+  applicabilityDefinitionAuthorityTransitions ApplicabilityDefinitionAuthorityTransition[]
 
   @@index([frameworkId])
   @@index([category])
@@ -91,20 +110,22 @@ model ComplianceRequirement {
 }
 
 model Assessment {
-  id               String                      @id @default(cuid())
-  title            String
-  score            Float?
-  status           AssessmentStatus            @default(DRAFT)
-  organizationId   String
-  frameworkId      String
-  userId           String
-  createdAt        DateTime                    @default(now())
-  updatedAt        DateTime                    @updatedAt
-  framework        Framework                   @relation(fields: [frameworkId], references: [id])
-  organization     Organization                @relation(fields: [organizationId], references: [id])
-  user             User                        @relation(fields: [userId], references: [id])
-  evidence         Evidence[]
-  currentAuthority CurrentAssessmentAuthority?
+  id                       String                               @id @default(cuid())
+  title                    String
+  score                    Float?
+  status                   AssessmentStatus                     @default(DRAFT)
+  organizationId           String
+  frameworkId              String
+  userId                   String
+  createdAt                DateTime                             @default(now())
+  updatedAt                DateTime                             @updatedAt
+  framework                Framework                            @relation(fields: [frameworkId], references: [id])
+  organization             Organization                         @relation(fields: [organizationId], references: [id])
+  user                     User                                 @relation(fields: [userId], references: [id])
+  evidence                 Evidence[]
+  currentAuthority         CurrentAssessmentAuthority?
+  regulatoryFactSnapshots  AssessmentRegulatoryFactSnapshot[]
+  requirementApplicability AssessmentRequirementApplicability[]
 }
 
 model CurrentAssessmentAuthority {
@@ -176,8 +197,9 @@ model Document {
   updatedAt      DateTime                   @updatedAt
   organizationId String
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  evidence     Evidence[]
+  organization               Organization                @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  evidence                   Evidence[]
+  regulatoryFactValueSources RegulatoryFactValueSource[]
 
   @@index([organizationId])
   @@index([status])
@@ -307,4 +329,560 @@ enum ComplianceRequirementCategory {
   FINANCIAL
   PROCUREMENT
   OTHER
+}
+
+enum RegulatoryFactValueType {
+  BOOLEAN
+  STRING
+  NUMBER
+  DATE
+  ENUM
+  MULTI_VALUE
+}
+
+enum RegulatoryFactKnowledgeState {
+  KNOWN
+  UNKNOWN
+}
+
+enum RegulatoryFactAuthorityState {
+  DECLARED
+  REVIEWED
+  VERIFIED
+  DISPUTED
+}
+
+enum RegulatoryFactSourceType {
+  USER_DECLARATION
+  DOCUMENT
+  SYSTEM_DERIVATION
+  EXTERNAL_SOURCE
+  IMPORT
+  ADMINISTRATIVE
+}
+
+enum ApplicabilityContextType {
+  ORGANIZATION
+  EVENT
+  MATTER
+  ACTIVITY
+  RELATIONSHIP
+  TRANSFER
+  SYSTEM
+  AUTOMATED_DECISION
+}
+
+enum ApplicabilityClass {
+  GENERAL
+  CONDITIONAL
+  SECTOR_SPECIFIC
+  EVENT_TRIGGERED
+}
+
+enum ApplicabilityResolutionPattern {
+  GENERAL_UNCONDITIONAL
+  GENERAL_WITH_EXCEPTION
+  ACTIVITY_CONDITIONAL
+  RELATIONSHIP_CONDITIONAL
+  PROCESSING_CATEGORY_CONDITIONAL
+  EVENT_TRIGGERED
+  REQUEST_OR_DISPUTE_TRIGGERED
+  PRIOR_AUTHORISATION_CONDITIONAL
+  SECTOR_SPECIFIC
+  COMPOUND_CONDITIONAL
+}
+
+enum ApplicabilityDefinitionStatus {
+  DRAFT
+  APPROVED
+  RETIRED
+}
+
+enum ApplicabilityStatus {
+  APPLICABLE
+  NOT_APPLICABLE
+  UNDETERMINED
+}
+
+enum ApplicabilityResolutionAuthority {
+  SYSTEM
+  HUMAN
+}
+
+enum ApplicabilityReviewState {
+  NOT_REQUIRED
+  REQUIRED
+  COMPLETED
+}
+
+enum RegulatoryFactValueSourceType {
+  DOCUMENT
+  EXTERNAL_REFERENCE
+  DECLARATION
+  IMPORT
+  ADMINISTRATIVE
+  OTHER
+}
+
+model ApplicabilityContext {
+  id               String                   @id @default(cuid())
+  organizationId   String
+  frameworkId      String
+  contextType      ApplicabilityContextType
+  stableContextKey String
+  name             String?
+  description      String?
+  openedAt         DateTime?
+  closedAt         DateTime?
+  active           Boolean                  @default(true)
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
+
+  organization  Organization                         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  framework     Framework                            @relation(fields: [frameworkId], references: [id], onDelete: Restrict)
+  facts         RegulatoryFact[]
+  factSnapshots AssessmentRegulatoryFactSnapshot[]
+  applicability AssessmentRequirementApplicability[]
+
+  @@unique([organizationId, frameworkId, contextType, stableContextKey])
+  @@index([organizationId, frameworkId])
+  @@index([organizationId, contextType])
+  @@index([frameworkId, contextType])
+  @@index([active])
+}
+
+model RegulatoryFact {
+  id               String   @id @default(cuid())
+  organizationId   String
+  factDefinitionId String
+  contextId        String
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  organization                      Organization                        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  factDefinition                    RegulatoryFactDefinition            @relation(fields: [factDefinitionId], references: [id], onDelete: Restrict)
+  context                           ApplicabilityContext                @relation(fields: [contextId], references: [id], onDelete: Restrict)
+  values                            RegulatoryFactValue[]
+  currentAuthority                  CurrentRegulatoryFactAuthority?
+  authorityTransitions              RegulatoryFactAuthorityTransition[]
+  assessmentRegulatoryFactSnapshots AssessmentRegulatoryFactSnapshot[]
+
+  @@unique([organizationId, factDefinitionId, contextId])
+  @@index([organizationId])
+  @@index([factDefinitionId])
+  @@index([contextId])
+  @@index([active])
+}
+
+model RegulatoryFactValue {
+  id                String                       @id @default(cuid())
+  regulatoryFactId  String
+  version           Int
+  knowledgeState    RegulatoryFactKnowledgeState
+  authorityState    RegulatoryFactAuthorityState
+  booleanValue      Boolean?
+  stringValue       String?
+  numberValue       Decimal?
+  dateValue         DateTime?
+  enumValue         String?
+  multiValue        String[]                     @default([])
+  validFrom         DateTime?
+  validUntil        DateTime?
+  establishedAt     DateTime
+  reviewedAt        DateTime?
+  sourceType        RegulatoryFactSourceType
+  sourceReference   String?
+  sourceDescription String?
+  establishedById   String?
+  reviewedById      String?
+  supersedesValueId String?
+  correctionOfId    String?
+  derivationKey     String?
+  derivationVersion String?
+  createdAt         DateTime                     @default(now())
+
+  regulatoryFact               RegulatoryFact                      @relation(fields: [regulatoryFactId], references: [id], onDelete: Restrict)
+  establishedBy                User?                               @relation("RegulatoryFactEstablishedBy", fields: [establishedById], references: [id], onDelete: SetNull)
+  reviewedBy                   User?                               @relation("RegulatoryFactReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  supersedesValue              RegulatoryFactValue?                @relation("RegulatoryFactSupersession", fields: [supersedesValueId], references: [id], onDelete: Restrict)
+  supersededBy                 RegulatoryFactValue[]               @relation("RegulatoryFactSupersession")
+  correctionOf                 RegulatoryFactValue?                @relation("RegulatoryFactCorrection", fields: [correctionOfId], references: [id], onDelete: Restrict)
+  corrections                  RegulatoryFactValue[]               @relation("RegulatoryFactCorrection")
+  currentAuthority             CurrentRegulatoryFactAuthority?
+  snapshots                    AssessmentRegulatoryFactSnapshot[]
+  sources                      RegulatoryFactValueSource[]
+  derivationInputs             RegulatoryFactDerivationInput[]     @relation("DerivedFactInputs")
+  usedAsDerivationInput        RegulatoryFactDerivationInput[]     @relation("FactValueUsedAsDerivationInput")
+  previousAuthorityTransitions RegulatoryFactAuthorityTransition[] @relation("PreviousRegulatoryFactAuthorityValue")
+  newAuthorityTransitions      RegulatoryFactAuthorityTransition[] @relation("NewRegulatoryFactAuthorityValue")
+
+  @@unique([regulatoryFactId, version])
+  @@index([regulatoryFactId])
+  @@index([knowledgeState])
+  @@index([authorityState])
+  @@index([validFrom])
+  @@index([validUntil])
+  @@index([sourceType])
+  @@index([establishedById])
+  @@index([reviewedById])
+}
+
+model CurrentRegulatoryFactAuthority {
+  id                    String   @id @default(cuid())
+  regulatoryFactId      String   @unique
+  regulatoryFactValueId String   @unique
+  establishedAt         DateTime @default(now())
+  establishedById       String?
+  reason                String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  regulatoryFact      RegulatoryFact      @relation(fields: [regulatoryFactId], references: [id], onDelete: Restrict)
+  regulatoryFactValue RegulatoryFactValue @relation(fields: [regulatoryFactValueId], references: [id], onDelete: Restrict)
+  establishedBy       User?               @relation("CurrentRegulatoryFactAuthorityEstablishedBy", fields: [establishedById], references: [id], onDelete: SetNull)
+
+  @@index([establishedById])
+}
+
+model ApplicabilityDefinition {
+  id                 String                         @id @default(cuid())
+  requirementId      String
+  version            Int
+  applicabilityClass ApplicabilityClass
+  resolutionPattern  ApplicabilityResolutionPattern
+  status             ApplicabilityDefinitionStatus  @default(DRAFT)
+  ruleAst            Json
+  ruleSchemaVersion  String
+  sourceTitle        String?
+  sourceReference    String?
+  sourceUrl          String?
+  effectiveFrom      DateTime?
+  effectiveUntil     DateTime?
+  approvedAt         DateTime?
+  approvedById       String?
+  retiredAt          DateTime?
+  createdAt          DateTime                       @default(now())
+
+  requirement                  ComplianceRequirement                        @relation(fields: [requirementId], references: [id], onDelete: Restrict)
+  approvedBy                   User?                                        @relation("ApplicabilityDefinitionApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  dependencies                 ApplicabilityRuleFactDependency[]
+  currentAuthority             CurrentApplicabilityDefinitionAuthority?
+  revisions                    AssessmentRequirementApplicabilityRevision[]
+  previousAuthorityTransitions ApplicabilityDefinitionAuthorityTransition[] @relation("PreviousApplicabilityDefinitionAuthority")
+  newAuthorityTransitions      ApplicabilityDefinitionAuthorityTransition[] @relation("NewApplicabilityDefinitionAuthority")
+
+  @@unique([requirementId, version])
+  @@index([requirementId])
+  @@index([status])
+  @@index([applicabilityClass])
+  @@index([resolutionPattern])
+  @@index([effectiveFrom])
+  @@index([effectiveUntil])
+}
+
+model ApplicabilityRuleFactDependency {
+  id                        String   @id @default(cuid())
+  applicabilityDefinitionId String
+  factDefinitionId          String
+  required                  Boolean  @default(true)
+  createdAt                 DateTime @default(now())
+
+  applicabilityDefinition ApplicabilityDefinition  @relation(fields: [applicabilityDefinitionId], references: [id], onDelete: Restrict)
+  factDefinition          RegulatoryFactDefinition @relation(fields: [factDefinitionId], references: [id], onDelete: Restrict)
+
+  @@unique([applicabilityDefinitionId, factDefinitionId])
+  @@index([applicabilityDefinitionId])
+  @@index([factDefinitionId])
+}
+
+model CurrentApplicabilityDefinitionAuthority {
+  id                        String   @id @default(cuid())
+  requirementId             String   @unique
+  applicabilityDefinitionId String   @unique
+  establishedAt             DateTime @default(now())
+  establishedById           String?
+  reason                    String?
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  requirement             ComplianceRequirement   @relation(fields: [requirementId], references: [id], onDelete: Restrict)
+  applicabilityDefinition ApplicabilityDefinition @relation(fields: [applicabilityDefinitionId], references: [id], onDelete: Restrict)
+  establishedBy           User?                   @relation("CurrentApplicabilityDefinitionAuthorityEstablishedBy", fields: [establishedById], references: [id], onDelete: SetNull)
+
+  @@index([establishedById])
+}
+
+model AssessmentRegulatoryFactSnapshot {
+  id                     String                        @id @default(cuid())
+  assessmentId           String
+  contextId              String
+  factDefinitionId       String
+  sourceRegulatoryFactId String?
+  sourceFactValueId      String?
+  factKey                String
+  factName               String
+  valueType              RegulatoryFactValueType
+  knowledgeState         RegulatoryFactKnowledgeState
+  authorityState         RegulatoryFactAuthorityState?
+  booleanValue           Boolean?
+  stringValue            String?
+  numberValue            Decimal?
+  dateValue              DateTime?
+  enumValue              String?
+  multiValue             String[]                      @default([])
+  validFrom              DateTime?
+  validUntil             DateTime?
+  sourceType             RegulatoryFactSourceType?
+  sourceReference        String?
+  sourceDescription      String?
+  sourceEstablishedAt    DateTime?
+  sourceReviewedAt       DateTime?
+  capturedAt             DateTime                      @default(now())
+  createdAt              DateTime                      @default(now())
+
+  assessment           Assessment               @relation(fields: [assessmentId], references: [id], onDelete: Restrict)
+  context              ApplicabilityContext     @relation(fields: [contextId], references: [id], onDelete: Restrict)
+  factDefinition       RegulatoryFactDefinition @relation(fields: [factDefinitionId], references: [id], onDelete: Restrict)
+  sourceRegulatoryFact RegulatoryFact?          @relation(fields: [sourceRegulatoryFactId], references: [id], onDelete: Restrict)
+  sourceFactValue      RegulatoryFactValue?     @relation(fields: [sourceFactValueId], references: [id], onDelete: Restrict)
+  determinationBasis   DeterminationFactBasis[]
+
+  @@index([assessmentId])
+  @@index([assessmentId, contextId])
+  @@index([factDefinitionId])
+  @@index([sourceRegulatoryFactId])
+  @@index([sourceFactValueId])
+  @@index([knowledgeState])
+}
+
+model AssessmentRequirementApplicability {
+  id            String   @id @default(cuid())
+  assessmentId  String
+  requirementId String
+  contextId     String
+  createdAt     DateTime @default(now())
+
+  assessment           Assessment                                   @relation(fields: [assessmentId], references: [id], onDelete: Restrict)
+  requirement          ComplianceRequirement                        @relation(fields: [requirementId], references: [id], onDelete: Restrict)
+  context              ApplicabilityContext                         @relation(fields: [contextId], references: [id], onDelete: Restrict)
+  revisions            AssessmentRequirementApplicabilityRevision[]
+  currentAuthority     CurrentApplicabilityResolutionAuthority?
+  authorityTransitions ApplicabilityResolutionAuthorityTransition[]
+
+  @@unique([assessmentId, requirementId, contextId])
+  @@index([assessmentId])
+  @@index([requirementId])
+  @@index([contextId])
+  @@index([assessmentId, requirementId])
+}
+
+model AssessmentRequirementApplicabilityRevision {
+  id                        String                           @id @default(cuid())
+  applicabilityId           String
+  revision                  Int
+  applicabilityDefinitionId String
+  status                    ApplicabilityStatus
+  resolutionAuthority       ApplicabilityResolutionAuthority
+  reviewState               ApplicabilityReviewState         @default(NOT_REQUIRED)
+  resolverVersion           String
+  reason                    String
+  resolutionBasis           Json?
+  resolvedAt                DateTime                         @default(now())
+  resolvedById              String?
+  reviewedAt                DateTime?
+  reviewedById              String?
+  createdAt                 DateTime                         @default(now())
+
+  applicability                AssessmentRequirementApplicability           @relation(fields: [applicabilityId], references: [id], onDelete: Restrict)
+  applicabilityDefinition      ApplicabilityDefinition                      @relation(fields: [applicabilityDefinitionId], references: [id], onDelete: Restrict)
+  resolvedBy                   User?                                        @relation("ApplicabilityRevisionResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+  reviewedBy                   User?                                        @relation("ApplicabilityRevisionReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  factBasis                    DeterminationFactBasis[]
+  currentAuthority             CurrentApplicabilityResolutionAuthority?
+  previousAuthorityTransitions ApplicabilityResolutionAuthorityTransition[] @relation("PreviousApplicabilityResolutionAuthority")
+  newAuthorityTransitions      ApplicabilityResolutionAuthorityTransition[] @relation("NewApplicabilityResolutionAuthority")
+
+  @@unique([applicabilityId, revision])
+  @@index([applicabilityId])
+  @@index([applicabilityDefinitionId])
+  @@index([status])
+  @@index([resolutionAuthority])
+  @@index([reviewState])
+  @@index([resolvedAt])
+  @@index([resolvedById])
+  @@index([reviewedById])
+}
+
+model DeterminationFactBasis {
+  id             String   @id @default(cuid())
+  revisionId     String
+  factSnapshotId String
+  createdAt      DateTime @default(now())
+
+  revision     AssessmentRequirementApplicabilityRevision @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  factSnapshot AssessmentRegulatoryFactSnapshot           @relation(fields: [factSnapshotId], references: [id], onDelete: Restrict)
+
+  @@unique([revisionId, factSnapshotId])
+  @@index([revisionId])
+  @@index([factSnapshotId])
+}
+
+model CurrentApplicabilityResolutionAuthority {
+  id              String   @id @default(cuid())
+  applicabilityId String   @unique
+  revisionId      String   @unique
+  establishedAt   DateTime @default(now())
+  establishedById String?
+  reason          String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  applicability AssessmentRequirementApplicability         @relation(fields: [applicabilityId], references: [id], onDelete: Restrict)
+  revision      AssessmentRequirementApplicabilityRevision @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  establishedBy User?                                      @relation("CurrentApplicabilityResolutionAuthorityEstablishedBy", fields: [establishedById], references: [id], onDelete: SetNull)
+
+  @@index([establishedById])
+}
+
+model RegulatoryFactDefinition {
+  id                  String                     @id @default(cuid())
+  frameworkId         String
+  key                 String
+  name                String
+  description         String?
+  valueType           RegulatoryFactValueType
+  allowedContextTypes ApplicabilityContextType[]
+  sourceTitle         String?
+  sourceReference     String?
+  sourceUrl           String?
+  effectiveFrom       DateTime?
+  active              Boolean                    @default(true)
+  createdAt           DateTime                   @default(now())
+  updatedAt           DateTime                   @updatedAt
+
+  framework                         Framework                          @relation(fields: [frameworkId], references: [id], onDelete: Restrict)
+  facts                             RegulatoryFact[]
+  ruleDependencies                  ApplicabilityRuleFactDependency[]
+  options                           RegulatoryFactDefinitionOption[]
+  assessmentRegulatoryFactSnapshots AssessmentRegulatoryFactSnapshot[]
+
+  @@unique([frameworkId, key])
+  @@index([frameworkId])
+  @@index([active])
+  @@index([valueType])
+}
+
+model RegulatoryFactDefinitionOption {
+  id               String   @id @default(cuid())
+  factDefinitionId String
+  value            String
+  label            String
+  description      String?
+  sortOrder        Int?
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  factDefinition RegulatoryFactDefinition @relation(fields: [factDefinitionId], references: [id], onDelete: Restrict)
+
+  @@unique([factDefinitionId, value])
+  @@index([factDefinitionId])
+  @@index([factDefinitionId, active])
+}
+
+model RegulatoryFactValueSource {
+  id                    String                        @id @default(cuid())
+  regulatoryFactValueId String
+  sourceType            RegulatoryFactValueSourceType
+  documentId            String?
+  sourceReference       String?
+  sourceDescription     String?
+  capturedAt            DateTime                      @default(now())
+  createdAt             DateTime                      @default(now())
+
+  regulatoryFactValue RegulatoryFactValue @relation(fields: [regulatoryFactValueId], references: [id], onDelete: Restrict)
+  document            Document?           @relation(fields: [documentId], references: [id], onDelete: Restrict)
+
+  @@index([regulatoryFactValueId])
+  @@index([sourceType])
+  @@index([documentId])
+}
+
+model RegulatoryFactDerivationInput {
+  id                 String   @id @default(cuid())
+  derivedFactValueId String
+  inputFactValueId   String
+  inputOrder         Int?
+  createdAt          DateTime @default(now())
+
+  derivedFactValue RegulatoryFactValue @relation("DerivedFactInputs", fields: [derivedFactValueId], references: [id], onDelete: Restrict)
+  inputFactValue   RegulatoryFactValue @relation("FactValueUsedAsDerivationInput", fields: [inputFactValueId], references: [id], onDelete: Restrict)
+
+  @@unique([derivedFactValueId, inputFactValueId])
+  @@index([derivedFactValueId])
+  @@index([inputFactValueId])
+}
+
+model RegulatoryFactAuthorityTransition {
+  id                  String   @id @default(cuid())
+  regulatoryFactId    String
+  previousFactValueId String?
+  newFactValueId      String
+  establishedById     String?
+  reason              String?
+  transitionedAt      DateTime @default(now())
+  createdAt           DateTime @default(now())
+
+  regulatoryFact    RegulatoryFact       @relation(fields: [regulatoryFactId], references: [id], onDelete: Restrict)
+  previousFactValue RegulatoryFactValue? @relation("PreviousRegulatoryFactAuthorityValue", fields: [previousFactValueId], references: [id], onDelete: Restrict)
+  newFactValue      RegulatoryFactValue  @relation("NewRegulatoryFactAuthorityValue", fields: [newFactValueId], references: [id], onDelete: Restrict)
+  establishedBy     User?                @relation("RegulatoryFactAuthorityTransitionEstablishedBy", fields: [establishedById], references: [id], onDelete: SetNull)
+
+  @@index([regulatoryFactId, transitionedAt])
+  @@index([previousFactValueId])
+  @@index([newFactValueId])
+  @@index([establishedById])
+}
+
+model ApplicabilityDefinitionAuthorityTransition {
+  id                                String   @id @default(cuid())
+  requirementId                     String
+  previousApplicabilityDefinitionId String?
+  newApplicabilityDefinitionId      String
+  establishedById                   String?
+  reason                            String?
+  transitionedAt                    DateTime @default(now())
+  createdAt                         DateTime @default(now())
+
+  requirement                     ComplianceRequirement    @relation(fields: [requirementId], references: [id], onDelete: Restrict)
+  previousApplicabilityDefinition ApplicabilityDefinition? @relation("PreviousApplicabilityDefinitionAuthority", fields: [previousApplicabilityDefinitionId], references: [id], onDelete: Restrict)
+  newApplicabilityDefinition      ApplicabilityDefinition  @relation("NewApplicabilityDefinitionAuthority", fields: [newApplicabilityDefinitionId], references: [id], onDelete: Restrict)
+  establishedBy                   User?                    @relation("ApplicabilityDefinitionAuthorityTransitionEstablishedBy", fields: [establishedById], references: [id], onDelete: SetNull)
+
+  @@index([requirementId, transitionedAt])
+  @@index([previousApplicabilityDefinitionId])
+  @@index([newApplicabilityDefinitionId])
+  @@index([establishedById])
+}
+
+model ApplicabilityResolutionAuthorityTransition {
+  id                 String   @id @default(cuid())
+  applicabilityId    String
+  previousRevisionId String?
+  newRevisionId      String
+  establishedById    String?
+  reason             String?
+  transitionedAt     DateTime @default(now())
+  createdAt          DateTime @default(now())
+
+  applicability    AssessmentRequirementApplicability          @relation(fields: [applicabilityId], references: [id], onDelete: Restrict)
+  previousRevision AssessmentRequirementApplicabilityRevision? @relation("PreviousApplicabilityResolutionAuthority", fields: [previousRevisionId], references: [id], onDelete: Restrict)
+  newRevision      AssessmentRequirementApplicabilityRevision  @relation("NewApplicabilityResolutionAuthority", fields: [newRevisionId], references: [id], onDelete: Restrict)
+  establishedBy    User?                                       @relation("ApplicabilityResolutionAuthorityTransitionEstablishedBy", fields: [establishedById], references: [id], onDelete: SetNull)
+
+  @@index([applicabilityId, transitionedAt])
+  @@index([previousRevisionId])
+  @@index([newRevisionId])
+  @@index([establishedById])
 }
