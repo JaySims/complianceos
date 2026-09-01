@@ -100,16 +100,21 @@ function normalizedMultiValue(
   return value ?? [];
 }
 
+function isProvided(
+  value: unknown
+): boolean {
+  return value !== null && value !== undefined;
+}
+
 function hasSubstantiveTypedValue(
   input: RegulatoryFactTypedValueInput
 ): boolean {
   return (
-    input.booleanValue !== null &&
-      input.booleanValue !== undefined ||
-    hasNonEmptyString(input.stringValue) ||
-    hasNumberValue(input.numberValue) ||
-    hasValidDate(input.dateValue) ||
-    hasNonEmptyString(input.enumValue) ||
+    isProvided(input.booleanValue) ||
+    isProvided(input.stringValue) ||
+    isProvided(input.numberValue) ||
+    isProvided(input.dateValue) ||
+    isProvided(input.enumValue) ||
     normalizedMultiValue(input.multiValue).length > 0
   );
 }
@@ -118,12 +123,11 @@ function activeTypedFieldCount(
   input: RegulatoryFactTypedValueInput
 ): number {
   return [
-    input.booleanValue !== null &&
-      input.booleanValue !== undefined,
-    hasNonEmptyString(input.stringValue),
-    hasNumberValue(input.numberValue),
-    hasValidDate(input.dateValue),
-    hasNonEmptyString(input.enumValue),
+    isProvided(input.booleanValue),
+    isProvided(input.stringValue),
+    isProvided(input.numberValue),
+    isProvided(input.dateValue),
+    isProvided(input.enumValue),
     normalizedMultiValue(input.multiValue).length > 0,
   ].filter(Boolean).length;
 }
@@ -287,12 +291,11 @@ export function validateRegulatoryFactValueShape(
       }
 
       const conflictingScalarField =
-        input.booleanValue !== null &&
-          input.booleanValue !== undefined ||
-        hasNonEmptyString(input.stringValue) ||
-        hasNumberValue(input.numberValue) ||
-        hasValidDate(input.dateValue) ||
-        hasNonEmptyString(input.enumValue);
+        isProvided(input.booleanValue) ||
+        isProvided(input.stringValue) ||
+        isProvided(input.numberValue) ||
+        isProvided(input.dateValue) ||
+        isProvided(input.enumValue);
 
       if (conflictingScalarField) {
         return conflictingTypedValueResult();
