@@ -944,9 +944,15 @@ export function evaluateApplicabilityRule(
   const truth = evaluateApplicabilityRuleTruth(
     rule,
     (predicate) => {
+      const hasFact =
+        Object.prototype.hasOwnProperty.call(
+          facts,
+          predicate.factKey
+        );
+
       const fact = facts[predicate.factKey];
 
-      if (!fact) {
+      if (!hasFact || !fact) {
         throw new Error(
           `Missing applicability fact input for ${predicate.factKey}`
         );
@@ -986,9 +992,15 @@ export function validateApplicabilityRuleSemantics(
       return { success: true };
 
     case "FACT_PREDICATE": {
+      const hasFactType =
+        Object.prototype.hasOwnProperty.call(
+          factTypes,
+          rule.factKey
+        );
+
       const valueType = factTypes[rule.factKey];
 
-      if (!valueType) {
+      if (!hasFactType || !valueType) {
         return {
           success: false,
           reason: "MISSING_FACT_TYPE",
