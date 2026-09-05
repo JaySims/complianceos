@@ -8,15 +8,10 @@ import {
 import { prisma } from "@/lib/prisma";
 
 import {
-  ApplicabilityRuleNode,
-  ApplicabilityRulePolicyFailureReason,
-  ApplicabilityRuleSemanticValidationResult,
-  ApplicabilityRuleSchemaVersionValidationResult,
-  extractApplicabilityRuleFactKeys,
-  validateApplicabilityRuleSchemaVersion,
-  validateApplicabilityRuleSemantics,
-  validateApplicabilityRuleStructure,
-} from "./applicabilityRulePolicy";
+  ApplicabilityDefinitionRulePolicyReason,
+  ValidatedApplicabilityDefinitionRule,
+  validateApplicabilityDefinitionRule,
+} from "./applicabilityDefinitionRuleValidation";
 
 export type CreateApplicabilityDefinitionInput = {
   organizationId: string;
@@ -53,22 +48,8 @@ export type CreateApplicabilityDefinitionFailureReason =
   | "CONCURRENT_VERSION_CONFLICT"
   | "PERSISTENCE_FAILED";
 
-type ApplicabilityRuleSemanticFailureReason =
-  Extract<
-    ApplicabilityRuleSemanticValidationResult,
-    { success: false }
-  >["reason"];
-
-type ApplicabilityRuleSchemaVersionFailureReason =
-  Extract<
-    ApplicabilityRuleSchemaVersionValidationResult,
-    { success: false }
-  >["reason"];
-
 export type CreateApplicabilityDefinitionRulePolicyReason =
-  | ApplicabilityRulePolicyFailureReason
-  | ApplicabilityRuleSemanticFailureReason
-  | ApplicabilityRuleSchemaVersionFailureReason;
+  ApplicabilityDefinitionRulePolicyReason;
 
 export type CreateApplicabilityDefinitionResult =
   | {
@@ -87,11 +68,6 @@ export type CreateApplicabilityDefinitionResult =
 type DatabaseClient =
   | Prisma.TransactionClient
   | typeof prisma;
-
-type ValidatedApplicabilityDefinitionRule = {
-  rule: ApplicabilityRuleNode;
-  factDefinitionIds: readonly string[];
-};
 
 type ApplicabilityDefinitionCreationContext = {
   requirementId: string;
@@ -172,375 +148,9 @@ async function validateApplicabilityDefinitionCreationContext(
   };
 }
 
-type ApplicabilityDefinitionRulePreparationResult =
-  | {
-      success: true;
-      rule: ApplicabilityRuleNode;
-      factKeys: readonly string[];
-    }
-  | {
-      success: false;
-      reason: CreateApplicabilityDefinitionFailureReason;
-      message: string;
-      rulePolicyReason?: CreateApplicabilityDefinitionRulePolicyReason;
-    };
-
-function prepareApplicabilityDefinitionRule(
-  input: CreateApplicabilityDefinitionInput
-): ApplicabilityDefinitionRulePreparationResult {
-  const versionResult =
-    validateApplicabilityRuleSchemaVersion(
-      input.ruleSchemaVersion
-    );
-
-  if (!versionResult.success) {
-    return {
-      success: false,
-      reason: "UNSUPPORTED_RULE_SCHEMA_VERSION",
-      message: versionResult.message,
-      rulePolicyReason: versionResult.reason,
-    };
-  }
-
-  const structureResult =
-    validateApplicabilityRuleStructure(
-      input.ruleAst
-    );
-
-  if (!structureResult.success) {
-    return {
-      success: false,
-      reason: "INVALID_RULE_STRUCTURE",
-      message: structureResult.message,
-      rulePolicyReason: structureResult.reason,
-    };
-  }
-
-  return {
-    success: true,
-    rule: structureResult.rule,
-    factKeys: extractApplicabilityRuleFactKeys(
-      structureResult.rule
-    ),
-  };
-}
-
-type ApplicabilityDefinitionFactResolution = {
-  factDefinitionIds: readonly string[];
-  factDefinitionIdsByKey: Readonly<
-    Record<string, string>
-  >;
-  factTypes: Readonly<
-    Record<
-      string,
-      import("@prisma/client").RegulatoryFactValueType
-    >
-  >;
-};
-
-type ApplicabilityDefinitionFactResolutionResult =
-  | {
-      success: true;
-      resolution: ApplicabilityDefinitionFactResolution;
-    }
-  | {
-      success: false;
-      reason: CreateApplicabilityDefinitionFailureReason;
-      message: string;
-    };
-
-async function resolveApplicabilityDefinitionFacts(
-  db: DatabaseClient,
-  frameworkId: string,
-  factKeys: readonly string[]
-): Promise<ApplicabilityDefinitionFactResolutionResult> {
-  if (factKeys.length === 0) {
-    return {
-      success: true,
-      resolution: {
-        factDefinitionIds: [],
-        factDefinitionIdsByKey:
-          Object.create(null) as Record<string, string>,
-        factTypes:
-          Object.create(null) as Record<
-            string,
-            import("@prisma/client").RegulatoryFactValueType
-          >,
-      },
-    };
-  }
-
-  const factDefinitions =
-    await db.regulatoryFactDefinition.findMany({
-      where: {
-        frameworkId,
-        key: {
-          in: [...factKeys],
-        },
-      },
-      select: {
-        id: true,
-        key: true,
-        frameworkId: true,
-        valueType: true,
-        active: true,
-      },
-    });
-
-  const byKey = new Map(
-    factDefinitions.map((definition) => [
-      definition.key,
-      definition,
-    ])
-  );
-
-  const factDefinitionIds: string[] = [];
-  const factDefinitionIdsByKey =
-    Object.create(null) as Record<string, string>;
-
-  const factTypes =
-    Object.create(null) as Record<
-      string,
-      import("@prisma/client").RegulatoryFactValueType
-    >;
-
-  for (const factKey of factKeys) {
-    const definition = byKey.get(factKey);
-
-    if (!definition) {
-      return {
-        success: false,
-        reason: "FACT_DEFINITION_NOT_FOUND",
-        message:
-          `Regulatory fact definition does not exist in the requirement framework for ${factKey}.`,
-      };
-    }
-
-    if (definition.frameworkId !== frameworkId) {
-      return {
-        success: false,
-        reason: "FACT_FRAMEWORK_MISMATCH",
-        message:
-          `Regulatory fact definition framework mismatch for ${factKey}.`,
-      };
-    }
-
-    if (!definition.active) {
-      return {
-        success: false,
-        reason: "FACT_DEFINITION_INACTIVE",
-        message:
-          `Regulatory fact definition is inactive for ${factKey}.`,
-      };
-    }
-
-    factDefinitionIds.push(definition.id);
-    factDefinitionIdsByKey[factKey] = definition.id;
-    factTypes[factKey] = definition.valueType;
-  }
-
-  return {
-    success: true,
-    resolution: {
-      factDefinitionIds,
-      factDefinitionIdsByKey,
-      factTypes,
-    },
-  };
-}
-
-type ApplicabilityDefinitionRuleSemanticValidationResult =
-  | {
-      success: true;
-    }
-  | {
-      success: false;
-      reason: CreateApplicabilityDefinitionFailureReason;
-      message: string;
-      rulePolicyReason?: CreateApplicabilityDefinitionRulePolicyReason;
-    };
-
-function validateApplicabilityDefinitionRuleSemantics(
-  rule: ApplicabilityRuleNode,
-  factTypes: ApplicabilityDefinitionFactResolution["factTypes"]
-): ApplicabilityDefinitionRuleSemanticValidationResult {
-  const semanticResult =
-    validateApplicabilityRuleSemantics(
-      rule,
-      factTypes
-    );
-
-  if (!semanticResult.success) {
-    return {
-      success: false,
-      reason: "INVALID_RULE_SEMANTICS",
-      message: semanticResult.message,
-      rulePolicyReason: semanticResult.reason,
-    };
-  }
-
-  return {
-    success: true,
-  };
-}
-
-type ApplicabilityDefinitionControlledOptionReference = {
-  factKey: string;
-  values: readonly string[];
-};
-
-function collectApplicabilityDefinitionControlledOptionReferences(
-  rule: ApplicabilityRuleNode,
-  factTypes: ApplicabilityDefinitionFactResolution["factTypes"]
-): ApplicabilityDefinitionControlledOptionReference[] {
-  const valuesByFactKey = new Map<string, Set<string>>();
-
-  function visit(node: ApplicabilityRuleNode): void {
-    switch (node.kind) {
-      case "CONSTANT":
-        return;
-
-      case "NOT":
-        visit(node.child);
-        return;
-
-      case "ALL":
-      case "ANY":
-        for (const child of node.children) {
-          visit(child);
-        }
-        return;
-
-      case "FACT_PREDICATE": {
-        const valueType = factTypes[node.factKey];
-
-        if (
-          valueType !== "ENUM" &&
-          valueType !== "MULTI_VALUE"
-        ) {
-          return;
-        }
-
-        if (node.operator === "IS_EMPTY") {
-          return;
-        }
-
-        const values =
-          Array.isArray(node.operand)
-            ? node.operand
-            : [node.operand];
-
-        let collected = valuesByFactKey.get(
-          node.factKey
-        );
-
-        if (!collected) {
-          collected = new Set<string>();
-          valuesByFactKey.set(
-            node.factKey,
-            collected
-          );
-        }
-
-        for (const value of values) {
-          if (typeof value === "string") {
-            collected.add(value);
-          }
-        }
-      }
-    }
-  }
-
-  visit(rule);
-
-  return [...valuesByFactKey.entries()]
-    .sort(([left], [right]) =>
-      left.localeCompare(right)
-    )
-    .map(([factKey, values]) => ({
-      factKey,
-      values: [...values].sort(),
-    }));
-}
-
-async function validateApplicabilityDefinitionControlledOptions(
-  db: DatabaseClient,
-  rule: ApplicabilityRuleNode,
-  resolution: ApplicabilityDefinitionFactResolution
-): Promise<ApplicabilityDefinitionRuleSemanticValidationResult> {
-  const references =
-    collectApplicabilityDefinitionControlledOptionReferences(
-      rule,
-      resolution.factTypes
-    );
-
-  if (references.length === 0) {
-    return {
-      success: true,
-    };
-  }
-
-  for (const reference of references) {
-    const factDefinitionId =
-      resolution.factDefinitionIdsByKey[
-        reference.factKey
-      ];
-
-    if (!factDefinitionId) {
-      return {
-        success: false,
-        reason: "INVALID_RULE_SEMANTICS",
-        message:
-          `Missing resolved fact definition for ${reference.factKey}.`,
-      };
-    }
-
-    const activeOptions =
-      await db.regulatoryFactDefinitionOption.findMany({
-        where: {
-          factDefinitionId,
-          active: true,
-          value: {
-            in: [...reference.values],
-          },
-        },
-        select: {
-          value: true,
-        },
-      });
-
-    const activeValues = new Set(
-      activeOptions.map((option) => option.value)
-    );
-
-    for (const value of reference.values) {
-      if (activeValues.has(value)) {
-        continue;
-      }
-
-      const valueType =
-        resolution.factTypes[reference.factKey];
-
-      return {
-        success: false,
-        reason:
-          valueType === "ENUM"
-            ? "INVALID_ENUM_OPTION"
-            : "INVALID_MULTI_VALUE_OPTION",
-        message:
-          `Controlled option ${value} is not active for ${reference.factKey}.`,
-      };
-    }
-  }
-
-  return {
-    success: true,
-  };
-}
-
 type PreparedApplicabilityDefinitionCreation = {
   context: ApplicabilityDefinitionCreationContext;
-  rule: ApplicabilityRuleNode;
+  rule: ValidatedApplicabilityDefinitionRule["rule"];
   factDefinitionIds: readonly string[];
 };
 
@@ -570,52 +180,29 @@ async function prepareApplicabilityDefinitionCreation(
     return contextResult;
   }
 
-  const ruleResult =
-    prepareApplicabilityDefinitionRule(input);
-
-  if (!ruleResult.success) {
-    return ruleResult;
-  }
-
-  const factResolutionResult =
-    await resolveApplicabilityDefinitionFacts(
+  const ruleValidation =
+    await validateApplicabilityDefinitionRule(
       db,
-      contextResult.context.frameworkId,
-      ruleResult.factKeys
+      {
+        frameworkId:
+          contextResult.context.frameworkId,
+        ruleSchemaVersion:
+          input.ruleSchemaVersion,
+        ruleAst: input.ruleAst,
+      }
     );
 
-  if (!factResolutionResult.success) {
-    return factResolutionResult;
-  }
-
-  const semanticResult =
-    validateApplicabilityDefinitionRuleSemantics(
-      ruleResult.rule,
-      factResolutionResult.resolution.factTypes
-    );
-
-  if (!semanticResult.success) {
-    return semanticResult;
-  }
-
-  const optionResult =
-    await validateApplicabilityDefinitionControlledOptions(
-      db,
-      ruleResult.rule,
-      factResolutionResult.resolution
-    );
-
-  if (!optionResult.success) {
-    return optionResult;
+  if (!ruleValidation.success) {
+    return ruleValidation;
   }
 
   return {
     success: true,
     prepared: {
       context: contextResult.context,
-      rule: ruleResult.rule,
+      rule: ruleValidation.validated.rule,
       factDefinitionIds:
-        factResolutionResult.resolution.factDefinitionIds,
+        ruleValidation.validated.factDefinitionIds,
     },
   };
 }
