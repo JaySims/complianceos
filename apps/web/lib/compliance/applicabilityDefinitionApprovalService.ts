@@ -5,6 +5,11 @@ import {
 
 import { prisma } from "@/lib/prisma";
 
+import {
+  ApplicabilityDefinitionRuleValidationFailureReason,
+  validateApplicabilityDefinitionRule,
+} from "./applicabilityDefinitionRuleValidation";
+
 /*
  * ============================================================
  * COMPLIANCEOS — APPLICABILITY DEFINITION APPROVAL SERVICE
@@ -47,6 +52,8 @@ export type ApproveApplicabilityDefinitionFailureReason =
   | "APPLICABILITY_DEFINITION_NOT_FOUND"
   | "REQUIREMENT_NOT_FOUND"
   | "REQUIREMENT_INACTIVE"
+  | ApplicabilityDefinitionRuleValidationFailureReason
+  | "DEPENDENCY_INTEGRITY_VIOLATION"
   | "DEFINITION_ALREADY_APPROVED"
   | "INVALID_DEFINITION_STATUS"
   | "DEFINITION_CHANGED_DURING_APPROVAL"
@@ -142,7 +149,14 @@ type ApplicabilityDefinitionApprovalContext = {
     requirementId: string;
     version: number;
     status: ApplicabilityDefinitionStatus;
+    ruleAst: Prisma.JsonValue;
+    ruleSchemaVersion: string;
+    dependencies: readonly {
+      factDefinitionId: string;
+      required: boolean;
+    }[];
   };
+  frameworkId: string;
 };
 
 type ApplicabilityDefinitionApprovalContextResult =
@@ -202,6 +216,14 @@ async function validateApplicabilityDefinitionApprovalContext(
         requirementId: true,
         version: true,
         status: true,
+        ruleAst: true,
+        ruleSchemaVersion: true,
+        dependencies: {
+          select: {
+            factDefinitionId: true,
+            required: true,
+          },
+        },
       },
     });
 
@@ -222,6 +244,7 @@ async function validateApplicabilityDefinitionApprovalContext(
       select: {
         id: true,
         active: true,
+        frameworkId: true,
       },
     });
 
@@ -247,8 +270,85 @@ async function validateApplicabilityDefinitionApprovalContext(
     success: true,
     context: {
       definition,
+      frameworkId: requirement.frameworkId,
     },
   };
+}
+
+
+/*
+ * ============================================================
+ * STORED RULE SEMANTIC REVALIDATION
+ * ============================================================
+ *
+ * Approval revalidates the persisted immutable rule against
+ * current V1 grammar/fact/controlled-option governance.
+ *
+ * Persisted dependency rows must exactly equal the canonical
+ * fact-definition dependency set derived from ruleAst.
+ *
+ * Approval never repairs dependency rows.
+ * ============================================================
+ */
+
+async function validateStoredApplicabilityDefinitionRuleForApproval(
+  db: DatabaseClient,
+  context: ApplicabilityDefinitionApprovalContext
+): Promise<ApproveApplicabilityDefinitionResult | null> {
+  const validation =
+    await validateApplicabilityDefinitionRule(
+      db,
+      {
+        frameworkId: context.frameworkId,
+        ruleSchemaVersion:
+          context.definition.ruleSchemaVersion,
+        ruleAst: context.definition.ruleAst,
+      }
+    );
+
+  if (!validation.success) {
+    return {
+      success: false,
+      reason: validation.reason,
+      message: validation.message,
+    };
+  }
+
+  const expectedIds =
+    validation.validated.factDefinitionIds;
+
+  const persistedDependencies =
+    context.definition.dependencies;
+
+  if (
+    persistedDependencies.length !== expectedIds.length
+  ) {
+    return {
+      success: false,
+      reason: "DEPENDENCY_INTEGRITY_VIOLATION",
+      message:
+        "Persisted applicability rule dependencies do not exactly match the rule AST.",
+    };
+  }
+
+  const expectedSet =
+    new Set(expectedIds);
+
+  for (const dependency of persistedDependencies) {
+    if (
+      dependency.required !== true ||
+      !expectedSet.has(dependency.factDefinitionId)
+    ) {
+      return {
+        success: false,
+        reason: "DEPENDENCY_INTEGRITY_VIOLATION",
+        message:
+          "Persisted applicability rule dependencies do not exactly match the rule AST.",
+      };
+    }
+  }
+
+  return null;
 }
 
 const approvedApplicabilityDefinitionSelect = {
@@ -392,6 +492,16 @@ export async function approveApplicabilityDefinition(
               );
             }
           }
+        }
+
+        const semanticFailure =
+          await validateStoredApplicabilityDefinitionRuleForApproval(
+            transaction,
+            validation.context
+          );
+
+        if (semanticFailure) {
+          return semanticFailure;
         }
 
         return persistApplicabilityDefinitionApproval(
