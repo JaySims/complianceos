@@ -1,5 +1,11 @@
 import {
+  ApplicabilityContextType,
+  ApplicabilityDefinitionStatus,
+  ApplicabilityResolutionPattern,
+  ApplicabilityReviewState,
+  ApplicabilityStatus,
   AssessmentStatus,
+  Prisma,
 } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
@@ -70,7 +76,15 @@ export type AssessmentLifecycleFailureReason =
   | "ASSESSMENT_NOT_FOUND"
   | "ASSESSMENT_ACCESS_DENIED"
   | "INVALID_STATUS_TRANSITION"
-  | "ASSESSMENT_STATUS_CHANGED";
+  | "ASSESSMENT_STATUS_CHANGED"
+  | "ASSESSMENT_COMPLETION_SCOPE_INCOMPLETE"
+  | "ASSESSMENT_COMPLETION_DEFINITION_AUTHORITY_MISSING"
+  | "ASSESSMENT_COMPLETION_DEFINITION_AUTHORITY_INTEGRITY_VIOLATION"
+  | "ASSESSMENT_COMPLETION_RESOLUTION_STALE"
+  | "ASSESSMENT_COMPLETION_AUTHORITY_MISSING"
+  | "ASSESSMENT_COMPLETION_AUTHORITY_INTEGRITY_VIOLATION"
+  | "ASSESSMENT_COMPLETION_REVIEW_REQUIRED"
+  | "ASSESSMENT_COMPLETION_TRANSACTION_FAILED";
 
 export type AssessmentLifecycleRecord = {
   id: string;
@@ -353,6 +367,333 @@ export async function createAssessment(
   };
 }
 
+class AssessmentCompletionInvariantError extends Error {
+  constructor(
+    readonly reason: AssessmentLifecycleFailureReason,
+    message: string
+  ) {
+    super(message);
+    this.name = "AssessmentCompletionInvariantError";
+  }
+}
+
+async function assertAssessmentCompletionIntegrity(
+  transaction: Prisma.TransactionClient,
+  assessment: {
+    id: string;
+    organizationId: string;
+    frameworkId: string;
+  }
+): Promise<void> {
+  /*
+   * Completion validates explicit persisted regulatory scope.
+   *
+   * V1 does not manufacture EVENT / MATTER / ACTIVITY /
+   * RELATIONSHIP / TRANSFER / SYSTEM / AUTOMATED_DECISION
+   * contexts that ComplianceOS has never observed.
+   *
+   * Every active framework requirement must nevertheless have:
+   *
+   * - explicit current ApplicabilityDefinition authority;
+   * - at least one explicit persisted applicability identity.
+   *
+   * GENERAL_UNCONDITIONAL requirements additionally require the
+   * canonical ORGANIZATION context.
+   */
+
+  const activeRequirements =
+    await transaction.complianceRequirement.findMany({
+      where: {
+        frameworkId: assessment.frameworkId,
+        active: true,
+      },
+
+      select: {
+        id: true,
+
+        currentApplicabilityAuthority: {
+          select: {
+            requirementId: true,
+            applicabilityDefinitionId: true,
+
+            applicabilityDefinition: {
+              select: {
+                id: true,
+                requirementId: true,
+                status: true,
+                resolutionPattern: true,
+              },
+            },
+          },
+        },
+      },
+
+      orderBy: {
+        id: "asc",
+      },
+    });
+
+  const applicability =
+    await transaction.assessmentRequirementApplicability.findMany({
+      where: {
+        assessmentId: assessment.id,
+      },
+
+      select: {
+        id: true,
+        assessmentId: true,
+        requirementId: true,
+        contextId: true,
+
+        requirement: {
+          select: {
+            frameworkId: true,
+          },
+        },
+
+        context: {
+          select: {
+            organizationId: true,
+            frameworkId: true,
+            contextType: true,
+            stableContextKey: true,
+          },
+        },
+
+        currentAuthority: {
+          select: {
+            applicabilityId: true,
+            revisionId: true,
+
+            revision: {
+              select: {
+                id: true,
+                applicabilityId: true,
+                applicabilityDefinitionId: true,
+                status: true,
+                reviewState: true,
+              },
+            },
+          },
+        },
+      },
+
+      orderBy: {
+        id: "asc",
+      },
+    });
+
+  const applicabilityByRequirement =
+    new Map<
+      string,
+      typeof applicability
+    >();
+
+  for (const item of applicability) {
+    const existing =
+      applicabilityByRequirement.get(
+        item.requirementId
+      );
+
+    if (existing) {
+      existing.push(item);
+    } else {
+      applicabilityByRequirement.set(
+        item.requirementId,
+        [item]
+      );
+    }
+  }
+
+  const authoritativeDefinitionByRequirement =
+    new Map<string, string>();
+
+  for (const requirement of activeRequirements) {
+    const definitionAuthority =
+      requirement.currentApplicabilityAuthority;
+
+    if (!definitionAuthority) {
+      throw new AssessmentCompletionInvariantError(
+        "ASSESSMENT_COMPLETION_DEFINITION_AUTHORITY_MISSING",
+        "Assessment cannot be completed because an active framework requirement has no explicit current applicability-definition authority."
+      );
+    }
+
+    if (
+      definitionAuthority.requirementId !==
+        requirement.id ||
+      definitionAuthority
+        .applicabilityDefinition
+        .id !==
+        definitionAuthority
+          .applicabilityDefinitionId ||
+      definitionAuthority
+        .applicabilityDefinition
+        .requirementId !==
+        requirement.id ||
+      definitionAuthority
+        .applicabilityDefinition
+        .status !==
+        ApplicabilityDefinitionStatus.APPROVED
+    ) {
+      throw new AssessmentCompletionInvariantError(
+        "ASSESSMENT_COMPLETION_DEFINITION_AUTHORITY_INTEGRITY_VIOLATION",
+        "Current applicability-definition authority does not belong to the exact active requirement or does not point to an approved definition."
+      );
+    }
+
+    authoritativeDefinitionByRequirement.set(
+      requirement.id,
+      definitionAuthority.applicabilityDefinitionId
+    );
+
+    const requirementApplicability =
+      applicabilityByRequirement.get(
+        requirement.id
+      ) ?? [];
+
+    /*
+     * Missing rows never mean implicitly APPLICABLE or
+     * NOT_APPLICABLE.
+     */
+    if (
+      requirementApplicability.length === 0
+    ) {
+      throw new AssessmentCompletionInvariantError(
+        "ASSESSMENT_COMPLETION_SCOPE_INCOMPLETE",
+        "Assessment cannot be completed because an active framework requirement has no explicit persisted applicability determination."
+      );
+    }
+
+    /*
+     * Canonical organization-wide requirements must use the
+     * explicit ORGANIZATION context.
+     *
+     * Other resolution patterns may legitimately use one or more
+     * contextual identities; V1 validates materialized identities
+     * without inventing unobserved contexts.
+     */
+    if (
+      definitionAuthority
+        .applicabilityDefinition
+        .resolutionPattern ===
+      ApplicabilityResolutionPattern
+        .GENERAL_UNCONDITIONAL
+    ) {
+      const hasCanonicalOrganizationContext =
+        requirementApplicability.some(
+          (item) =>
+            item.context.contextType ===
+              ApplicabilityContextType.ORGANIZATION &&
+            item.context.stableContextKey ===
+              "ORGANIZATION" &&
+            item.context.organizationId ===
+              assessment.organizationId &&
+            item.context.frameworkId ===
+              assessment.frameworkId
+        );
+
+      if (!hasCanonicalOrganizationContext) {
+        throw new AssessmentCompletionInvariantError(
+          "ASSESSMENT_COMPLETION_SCOPE_INCOMPLETE",
+          "Assessment cannot be completed because a GENERAL_UNCONDITIONAL requirement lacks its canonical ORGANIZATION-context applicability determination."
+        );
+      }
+    }
+  }
+
+  /*
+   * Every materialized applicability identity must remain inside
+   * the assessment domain and possess an explicit trustworthy
+   * current resolution authority.
+   */
+  for (const item of applicability) {
+    if (
+      item.assessmentId !== assessment.id ||
+      item.requirement.frameworkId !==
+        assessment.frameworkId ||
+      item.context.organizationId !==
+        assessment.organizationId ||
+      item.context.frameworkId !==
+        assessment.frameworkId
+    ) {
+      throw new AssessmentCompletionInvariantError(
+        "ASSESSMENT_COMPLETION_AUTHORITY_INTEGRITY_VIOLATION",
+        "Assessment applicability scope crosses the authorized assessment organization or framework domain."
+      );
+    }
+
+    const authority = item.currentAuthority;
+
+    if (!authority) {
+      throw new AssessmentCompletionInvariantError(
+        "ASSESSMENT_COMPLETION_AUTHORITY_MISSING",
+        "Assessment cannot be completed because an applicability determination has no explicit current resolution authority."
+      );
+    }
+
+    if (
+      authority.applicabilityId !== item.id ||
+      authority.revisionId !==
+        authority.revision.id ||
+      authority.revision.applicabilityId !==
+        item.id
+    ) {
+      throw new AssessmentCompletionInvariantError(
+        "ASSESSMENT_COMPLETION_AUTHORITY_INTEGRITY_VIOLATION",
+        "Current applicability resolution authority does not belong to the exact applicability identity being completed."
+      );
+    }
+
+    const authoritativeDefinitionId =
+      authoritativeDefinitionByRequirement.get(
+        item.requirementId
+      );
+
+    if (!authoritativeDefinitionId) {
+      throw new AssessmentCompletionInvariantError(
+        "ASSESSMENT_COMPLETION_DEFINITION_AUTHORITY_INTEGRITY_VIOLATION",
+        "Assessment applicability references a requirement outside the validated active current-definition authority set."
+      );
+    }
+
+    if (
+      authority.revision
+        .applicabilityDefinitionId !==
+      authoritativeDefinitionId
+    ) {
+      throw new AssessmentCompletionInvariantError(
+        "ASSESSMENT_COMPLETION_RESOLUTION_STALE",
+        "Assessment cannot be completed because a current applicability resolution was produced from a definition that is no longer authoritative for its requirement."
+      );
+    }
+
+    if (
+      authority.revision.status !==
+        ApplicabilityStatus.APPLICABLE &&
+      authority.revision.status !==
+        ApplicabilityStatus.NOT_APPLICABLE &&
+      authority.revision.status !==
+        ApplicabilityStatus.UNDETERMINED
+    ) {
+      throw new AssessmentCompletionInvariantError(
+        "ASSESSMENT_COMPLETION_AUTHORITY_INTEGRITY_VIOLATION",
+        "Current applicability resolution authority contains an unsupported applicability status."
+      );
+    }
+
+    if (
+      authority.revision.reviewState ===
+      ApplicabilityReviewState.REQUIRED
+    ) {
+      throw new AssessmentCompletionInvariantError(
+        "ASSESSMENT_COMPLETION_REVIEW_REQUIRED",
+        "Assessment cannot be completed while a current applicability resolution still requires regulatory review."
+      );
+    }
+  }
+}
+
 /*
  * ============================================================
  * TRANSITION ASSESSMENT STATUS
@@ -374,180 +715,174 @@ export async function transitionAssessmentStatus(
   assessmentId: string,
   nextStatus: AssessmentStatus
 ): Promise<AssessmentLifecycleResult> {
-  /*
-   * ----------------------------------------------------------
-   * 1. Locate Assessment.
-   * ----------------------------------------------------------
-   */
+  try {
+    return await prisma.$transaction<AssessmentLifecycleResult>(
+      async (
+        transaction: Prisma.TransactionClient
+      ): Promise<AssessmentLifecycleResult> => {
+        const assessment =
+          await transaction.assessment.findUnique({
+            where: {
+              id: assessmentId,
+            },
 
-  const assessment =
-    await prisma.assessment.findUnique({
-      where: {
-        id: assessmentId,
+            select: {
+              id: true,
+              status: true,
+              organizationId: true,
+              frameworkId: true,
+            },
+          });
+
+        if (!assessment) {
+          return {
+            success: false,
+            reason: "ASSESSMENT_NOT_FOUND",
+            message:
+              "Compliance assessment not found.",
+          };
+        }
+
+        if (
+          assessment.organizationId !==
+          organizationId
+        ) {
+          return {
+            success: false,
+            reason:
+              "ASSESSMENT_ACCESS_DENIED",
+            message:
+              "Compliance assessment does not belong to the authorized organisation.",
+          };
+        }
+
+        if (
+          !canTransitionAssessmentStatus(
+            assessment.status,
+            nextStatus
+          )
+        ) {
+          return {
+            success: false,
+            reason:
+              "INVALID_STATUS_TRANSITION",
+            message:
+              `Assessment cannot transition from ${assessment.status} to ${nextStatus}.`,
+          };
+        }
+
+        /*
+         * Completion is a regulatory closure boundary.
+         *
+         * Ordinary DRAFT -> IN_PROGRESS and IN_PROGRESS -> REVIEW
+         * transitions do not require applicability closure.
+         */
+        if (
+          assessment.status ===
+            AssessmentStatus.REVIEW &&
+          nextStatus ===
+            AssessmentStatus.COMPLETED
+        ) {
+          await assertAssessmentCompletionIntegrity(
+            transaction,
+            assessment
+          );
+        }
+
+        const update =
+          await transaction.assessment.updateMany({
+            where: {
+              id: assessment.id,
+              organizationId,
+              status: assessment.status,
+            },
+
+            data: {
+              status: nextStatus,
+            },
+          });
+
+        if (update.count !== 1) {
+          throw new AssessmentCompletionInvariantError(
+            "ASSESSMENT_STATUS_CHANGED",
+            "Assessment lifecycle state changed before the requested transition could be applied."
+          );
+        }
+
+        const updated =
+          await transaction.assessment.findFirst({
+            where: {
+              id: assessment.id,
+              organizationId,
+              status: nextStatus,
+            },
+
+            select: {
+              id: true,
+              title: true,
+              score: true,
+              status: true,
+              organizationId: true,
+              frameworkId: true,
+              userId: true,
+              createdAt: true,
+              updatedAt: true,
+            },
+          });
+
+        /*
+         * This confirmation occurs after mutation, therefore
+         * failure MUST throw so Prisma aborts the transaction.
+         */
+        if (!updated) {
+          throw new AssessmentCompletionInvariantError(
+            "ASSESSMENT_STATUS_CHANGED",
+            "Assessment lifecycle state changed before the completed transition could be confirmed."
+          );
+        }
+
+        return {
+          success: true,
+          assessment: updated,
+        };
       },
+      {
+        isolationLevel:
+          Prisma.TransactionIsolationLevel.Serializable,
+      }
+    );
+  } catch (error) {
+    if (
+      error instanceof
+      AssessmentCompletionInvariantError
+    ) {
+      return {
+        success: false,
+        reason: error.reason,
+        message: error.message,
+      };
+    }
 
-      select: {
-        id: true,
-        status: true,
-        organizationId: true,
-      },
-    });
+    if (
+      error instanceof
+        Prisma.PrismaClientKnownRequestError &&
+      (error.code === "P2034" ||
+        error.code === "P2002")
+    ) {
+      return {
+        success: false,
+        reason: "ASSESSMENT_STATUS_CHANGED",
+        message:
+          "Assessment lifecycle state changed concurrently.",
+      };
+    }
 
-  if (!assessment) {
     return {
       success: false,
-      reason: "ASSESSMENT_NOT_FOUND",
-      message:
-        "Compliance assessment not found.",
-    };
-  }
-
-  /*
-   * ----------------------------------------------------------
-   * 2. Enforce tenant ownership.
-   * ----------------------------------------------------------
-   */
-
-  if (
-    assessment.organizationId !==
-    organizationId
-  ) {
-    return {
-      success: false,
-
       reason:
-        "ASSESSMENT_ACCESS_DENIED",
-
+        "ASSESSMENT_COMPLETION_TRANSACTION_FAILED",
       message:
-        "Compliance assessment does not belong to the authorized organisation.",
+        "Assessment lifecycle transition could not be completed safely.",
     };
   }
-
-  /*
-   * ----------------------------------------------------------
-   * 3. Enforce lifecycle policy against observed state.
-   * ----------------------------------------------------------
-   */
-
-  if (
-    !canTransitionAssessmentStatus(
-      assessment.status,
-      nextStatus
-    )
-  ) {
-    return {
-      success: false,
-
-      reason:
-        "INVALID_STATUS_TRANSITION",
-
-      message:
-        `Assessment cannot transition from ${assessment.status} to ${nextStatus}.`,
-    };
-  }
-
-  /*
-   * ----------------------------------------------------------
-   * 4. Persist using an atomic optimistic concurrency predicate.
-   *
-   * The update requires:
-   *
-   * - Assessment identity;
-   * - authorized Organization;
-   * - the exact status validated above.
-   *
-   * If another request changes the lifecycle state after our
-   * read, this update affects zero rows instead of overwriting
-   * newer state.
-   * ----------------------------------------------------------
-   */
-
-  const update =
-    await prisma.assessment.updateMany({
-      where: {
-        id:
-          assessment.id,
-
-        organizationId,
-
-        status:
-          assessment.status,
-      },
-
-      data: {
-        status:
-          nextStatus,
-      },
-    });
-
-  if (update.count !== 1) {
-    return {
-      success: false,
-
-      reason:
-        "ASSESSMENT_STATUS_CHANGED",
-
-      message:
-        "Assessment lifecycle state changed before the requested transition could be applied.",
-    };
-  }
-
-  /*
-   * ----------------------------------------------------------
-   * 5. Reload the successfully transitioned Assessment.
-   *
-   * The tenant and expected new status remain part of the read
-   * predicate.
-   * ----------------------------------------------------------
-   */
-
-  const updated =
-    await prisma.assessment.findFirst({
-      where: {
-        id:
-          assessment.id,
-
-        organizationId,
-
-        status:
-          nextStatus,
-      },
-
-      select: {
-        id: true,
-        title: true,
-        score: true,
-        status: true,
-        organizationId: true,
-        frameworkId: true,
-        userId: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-    });
-
-  /*
-   * The atomic update succeeded. Failure to confirm the expected
-   * state means another lifecycle mutation occurred immediately
-   * afterward.
-   */
-
-  if (!updated) {
-    return {
-      success: false,
-
-      reason:
-        "ASSESSMENT_STATUS_CHANGED",
-
-      message:
-        "Assessment lifecycle state changed before the completed transition could be confirmed.",
-    };
-  }
-
-  return {
-    success: true,
-
-    assessment:
-      updated,
-  };
 }

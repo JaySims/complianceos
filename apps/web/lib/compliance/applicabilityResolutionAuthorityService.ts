@@ -430,6 +430,19 @@ export type EstablishInitialApplicabilityResolutionAuthorityInput = {
   reason?: string | null;
 };
 
+class ApplicabilityResolutionAuthorityTransactionAbort extends Error {
+  constructor(
+    readonly reason:
+      | "AUTHORITY_TRANSACTION_FAILED"
+      | "CURRENT_AUTHORITY_INTEGRITY_VIOLATION",
+    message: string
+  ) {
+    super(message);
+    this.name =
+      "ApplicabilityResolutionAuthorityTransactionAbort";
+  }
+}
+
 export async function establishInitialApplicabilityResolutionAuthority(
   input: EstablishInitialApplicabilityResolutionAuthorityInput
 ): Promise<ApplicabilityResolutionAuthorityResult> {
@@ -525,12 +538,10 @@ export async function establishInitialApplicabilityResolutionAuthority(
           confirmed.id !== authority.id ||
           confirmed.revisionId !== input.revisionId
         ) {
-          return {
-            success: false,
-            reason: "AUTHORITY_TRANSACTION_FAILED",
-            message:
-              "Initial applicability resolution authority could not be confirmed after persistence.",
-          };
+          throw new ApplicabilityResolutionAuthorityTransactionAbort(
+            "AUTHORITY_TRANSACTION_FAILED",
+            "Initial applicability resolution authority could not be confirmed after persistence."
+          );
         }
 
         if (
@@ -539,13 +550,10 @@ export async function establishInitialApplicabilityResolutionAuthority(
             input.applicabilityId
           )
         ) {
-          return {
-            success: false,
-            reason:
-              "CURRENT_AUTHORITY_INTEGRITY_VIOLATION",
-            message:
-              "Persisted current applicability resolution authority does not belong to the expected applicability record.",
-          };
+          throw new ApplicabilityResolutionAuthorityTransactionAbort(
+            "CURRENT_AUTHORITY_INTEGRITY_VIOLATION",
+            "Persisted current applicability resolution authority does not belong to the expected applicability record."
+          );
         }
 
         return {
@@ -562,6 +570,17 @@ export async function establishInitialApplicabilityResolutionAuthority(
       }
     );
   } catch (error) {
+    if (
+      error instanceof
+      ApplicabilityResolutionAuthorityTransactionAbort
+    ) {
+      return {
+        success: false,
+        reason: error.reason,
+        message: error.message,
+      };
+    }
+
     if (
       error instanceof Prisma.PrismaClientKnownRequestError &&
       (error.code === "P2034" ||
@@ -735,12 +754,10 @@ export async function supersedeApplicabilityResolutionAuthority(
           !confirmed ||
           confirmed.revisionId !== input.revisionId
         ) {
-          return {
-            success: false,
-            reason: "AUTHORITY_TRANSACTION_FAILED",
-            message:
-              "Superseded applicability resolution authority could not be confirmed after persistence.",
-          };
+          throw new ApplicabilityResolutionAuthorityTransactionAbort(
+            "AUTHORITY_TRANSACTION_FAILED",
+            "Superseded applicability resolution authority could not be confirmed after persistence."
+          );
         }
 
         if (
@@ -749,13 +766,10 @@ export async function supersedeApplicabilityResolutionAuthority(
             input.applicabilityId
           )
         ) {
-          return {
-            success: false,
-            reason:
-              "CURRENT_AUTHORITY_INTEGRITY_VIOLATION",
-            message:
-              "Persisted current applicability resolution authority does not belong to the expected applicability record.",
-          };
+          throw new ApplicabilityResolutionAuthorityTransactionAbort(
+            "CURRENT_AUTHORITY_INTEGRITY_VIOLATION",
+            "Persisted current applicability resolution authority does not belong to the expected applicability record."
+          );
         }
 
         return {
@@ -772,6 +786,17 @@ export async function supersedeApplicabilityResolutionAuthority(
       }
     );
   } catch (error) {
+    if (
+      error instanceof
+      ApplicabilityResolutionAuthorityTransactionAbort
+    ) {
+      return {
+        success: false,
+        reason: error.reason,
+        message: error.message,
+      };
+    }
+
     if (
       error instanceof Prisma.PrismaClientKnownRequestError &&
       (error.code === "P2034" ||
