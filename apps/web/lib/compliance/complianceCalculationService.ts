@@ -14,6 +14,11 @@ import {
   type ComplianceIntegrityFailureReason,
 } from "@/lib/compliance/complianceIntegrity";
 
+import {
+  determineApplicabilityScoringScope,
+  type ApplicabilityScoringScopeFailureReason,
+} from "@/lib/compliance/applicabilityScoringScopePolicy";
+
 /*
  * ============================================================
  * COMPLIANCEOS — COMPLIANCE CALCULATION SERVICE
@@ -83,7 +88,8 @@ import {
 export type ComplianceCalculationFailureReason =
   | "ASSESSMENT_NOT_FOUND"
   | "ASSESSMENT_ACCESS_DENIED"
-  | ComplianceIntegrityFailureReason;
+  | ComplianceIntegrityFailureReason
+  | ApplicabilityScoringScopeFailureReason;
 
 export type ComplianceCalculationResult =
   | {
@@ -241,9 +247,113 @@ export async function calculateAssessmentCompliance(
         requirement.active
     );
 
-  const activeRequirementIds =
+  const applicabilityRows =
+    await database.complianceRequirement.findMany({
+      where: {
+        frameworkId:
+          assessment.frameworkId,
+        active: true,
+      },
+
+      select: {
+        id: true,
+        active: true,
+
+        currentApplicabilityAuthority: {
+          select: {
+            requirementId: true,
+            applicabilityDefinitionId: true,
+
+            applicabilityDefinition: {
+              select: {
+                id: true,
+                requirementId: true,
+                status: true,
+              },
+            },
+          },
+        },
+
+        assessmentApplicability: {
+          where: {
+            assessmentId:
+              assessment.id,
+          },
+
+          select: {
+            id: true,
+            requirementId: true,
+
+            currentAuthority: {
+              select: {
+                applicabilityId: true,
+                revisionId: true,
+
+                revision: {
+                  select: {
+                    id: true,
+                    applicabilityId: true,
+                    applicabilityDefinitionId: true,
+                    status: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+
+      orderBy: [
+        {
+          category: "asc",
+        },
+        {
+          code: "asc",
+        },
+      ],
+    });
+
+  const applicabilityScope =
+    determineApplicabilityScoringScope(
+      applicabilityRows.map(
+        (requirement) => ({
+          id: requirement.id,
+          active: requirement.active,
+          currentDefinitionAuthority:
+            requirement.currentApplicabilityAuthority,
+          applicability:
+            requirement.assessmentApplicability,
+        })
+      )
+    );
+
+  if (!applicabilityScope.success) {
+    return {
+      success: false,
+      reason:
+        applicabilityScope.reason,
+      message:
+        applicabilityScope.message,
+    };
+  }
+
+  const applicableRequirementIds =
     new Set(
-      activeRequirements.map(
+      applicabilityScope
+        .applicableRequirementIds
+    );
+
+  const scoringRequirements =
+    activeRequirements.filter(
+      (requirement) =>
+        applicableRequirementIds.has(
+          requirement.id
+        )
+    );
+
+  const scoringRequirementIds =
+    new Set(
+      scoringRequirements.map(
         (requirement) =>
           requirement.id
       )
@@ -320,11 +430,11 @@ export async function calculateAssessmentCompliance(
    * ----------------------------------------------------------
    */
 
-  const activeEvidence =
+  const scoringEvidence =
     integrity.evidence.filter(
       (item) =>
         item.requirementId !== null &&
-        activeRequirementIds.has(
+        scoringRequirementIds.has(
           item.requirementId
         )
     );
@@ -338,8 +448,8 @@ export async function calculateAssessmentCompliance(
 
   const calculation =
     calculateEvidenceCompliance(
-      activeRequirements,
-      activeEvidence
+      scoringRequirements,
+      scoringEvidence
     );
 
   return {
