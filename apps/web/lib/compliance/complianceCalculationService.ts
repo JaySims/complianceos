@@ -19,6 +19,11 @@ import {
   type ApplicabilityScoringScopeFailureReason,
 } from "@/lib/compliance/applicabilityScoringScopePolicy";
 
+import {
+  deriveApplicabilityCoverage,
+  type ApplicabilityCoverage,
+} from "@/lib/compliance/applicabilityCoveragePolicy";
+
 /*
  * ============================================================
  * COMPLIANCEOS — COMPLIANCE CALCULATION SERVICE
@@ -102,6 +107,7 @@ export type ComplianceCalculationResult =
       };
 
       calculation: ComplianceScoreResult;
+      applicabilityCoverage: ApplicabilityCoverage;
     }
   | {
       success: false;
@@ -337,6 +343,19 @@ export async function calculateAssessmentCompliance(
     };
   }
 
+  const applicabilityCoverage =
+    deriveApplicabilityCoverage({
+      applicableRequirementIds:
+        applicabilityScope
+          .applicableRequirementIds,
+      notApplicableRequirementIds:
+        applicabilityScope
+          .notApplicableRequirementIds,
+      undeterminedRequirementIds:
+        applicabilityScope
+          .undeterminedRequirementIds,
+    });
+
   const applicableRequirementIds =
     new Set(
       applicabilityScope
@@ -467,5 +486,6 @@ export async function calculateAssessmentCompliance(
     },
 
     calculation,
+    applicabilityCoverage,
   };
 }
