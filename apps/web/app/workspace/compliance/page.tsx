@@ -1,9 +1,5 @@
-import ExecutiveWorkflowPage from "@/components/workflows/ExecutiveWorkflowPage";
+import ComplianceWorkspace from "@/components/compliance/ComplianceWorkspace";
 
 export default function ComplianceWorkspacePage() {
-  return (
-    <ExecutiveWorkflowPage
-      workflowId="compliance"
-    />
-  );
+  return <ComplianceWorkspace />;
 }
