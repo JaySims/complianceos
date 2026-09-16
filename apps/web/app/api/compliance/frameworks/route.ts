@@ -13,6 +13,20 @@ import {
   type OrganizationComplianceFrameworkPortfolioFailureReason,
 } from "@/lib/compliance/organizationComplianceFrameworkPortfolioService";
 
+import {
+  establishOrganizationFramework,
+} from "@/lib/compliance/organizationFrameworkEstablishmentService";
+
+import {
+  canEstablishOrganizationFrameworkFromHttp,
+  invalidOrganizationFrameworkEstablishmentRequest,
+  organizationFrameworkEstablishmentAccessFailure,
+  organizationFrameworkEstablishmentForbidden,
+  organizationFrameworkEstablishmentHttpResponse,
+  validateOrganizationFrameworkEstablishmentHttpInput,
+} from "@/lib/compliance/organizationFrameworkEstablishmentHttp";
+
+
 /*
  * ============================================================
  * COMPLIANCEOS — AUTHORITATIVE FRAMEWORK PORTFOLIO API
@@ -44,7 +58,7 @@ import {
  * An Organization with no explicit current authorities has a
  * valid empty authoritative portfolio.
  *
- * This route performs no persistence and no authority mutation.
+ * GET performs no persistence and no authority mutation.
  * ============================================================
  */
 
@@ -73,6 +87,7 @@ function organizationAccessFailure(
   );
 }
 
+
 function portfolioFailureStatus(
   reason: OrganizationComplianceFrameworkPortfolioFailureReason
 ): number {
@@ -88,6 +103,20 @@ function portfolioFailureStatus(
       return 409;
   }
 }
+
+
+/*
+ * ============================================================
+ * GET /api/compliance/frameworks
+ * ============================================================
+ *
+ * Returns the authenticated organization's authoritative
+ * compliance framework portfolio.
+ *
+ * Portfolio membership comes only from explicit
+ * CurrentAssessmentAuthority.
+ * ============================================================
+ */
 
 export async function GET(
   req: NextRequest
@@ -125,5 +154,93 @@ export async function GET(
     {
       status: 200,
     }
+  );
+}
+
+
+/*
+ * ============================================================
+ * POST /api/compliance/frameworks
+ * ============================================================
+ *
+ * Establishes one compliance framework inside the authenticated
+ * organization's authoritative compliance portfolio.
+ *
+ * SECURITY
+ *
+ * - organizationId comes only from OrganizationAccessContext;
+ * - userId comes only from OrganizationAccessContext;
+ * - browser supplies only frameworkId and optional title;
+ * - OWNER or ADMIN management authority is required;
+ * - unsupported request fields are rejected.
+ *
+ * PERSISTENCE
+ *
+ * The establishment service owns the SERIALIZABLE transaction
+ * that creates both the DRAFT Assessment and matching
+ * CurrentAssessmentAuthority.
+ * ============================================================
+ */
+
+export async function POST(
+  req: NextRequest
+) {
+  const access =
+    await resolveOrganizationAccess(
+      req
+    );
+
+  if (!access.authorized) {
+    return organizationFrameworkEstablishmentAccessFailure(
+      access.reason
+    );
+  }
+
+  if (
+    !canEstablishOrganizationFrameworkFromHttp(
+      access.context
+    )
+  ) {
+    return organizationFrameworkEstablishmentForbidden();
+  }
+
+  let body: unknown;
+
+  try {
+    body =
+      await req.json();
+  } catch {
+    return invalidOrganizationFrameworkEstablishmentRequest();
+  }
+
+  const validation =
+    validateOrganizationFrameworkEstablishmentHttpInput(
+      body
+    );
+
+  if (!validation.success) {
+    return invalidOrganizationFrameworkEstablishmentRequest(
+      validation.message
+    );
+  }
+
+  const result =
+    await establishOrganizationFramework({
+      organizationId:
+        access.context.organization.id,
+
+      frameworkId:
+        validation.value.frameworkId,
+
+      userId:
+        access.context.user.id,
+
+      title:
+        validation.value.title ??
+        "Compliance Assessment",
+    });
+
+  return organizationFrameworkEstablishmentHttpResponse(
+    result
   );
 }
