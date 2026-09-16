@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import FrameworkEstablishment from "@/components/compliance/FrameworkEstablishment";
 import ExecutiveWorkflowPage from "@/components/workflows/ExecutiveWorkflowPage";
 
 type FrameworkPortfolioEntry = {
@@ -54,6 +55,9 @@ type AssessmentComplianceRead = {
 export default function ComplianceWorkspace() {
   const [portfolio, setPortfolio] =
     useState<FrameworkPortfolioEntry[]>([]);
+
+  const [portfolioRefreshKey, setPortfolioRefreshKey] =
+    useState(0);
 
   const [portfolioLoading, setPortfolioLoading] =
     useState(true);
@@ -137,7 +141,7 @@ export default function ComplianceWorkspace() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [portfolioRefreshKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -297,6 +301,17 @@ export default function ComplianceWorkspace() {
           </div>
         )}
       </section>
+
+      <FrameworkEstablishment
+        establishedFrameworkIds={portfolio.map(
+          (entry) => entry.framework.id
+        )}
+        onEstablished={() => {
+          setPortfolioRefreshKey(
+            (current) => current + 1
+          );
+        }}
+      />
 
       <section className="rounded-3xl border border-slate-200 bg-white p-8 shadow-lg">
         <div className="mb-6">
