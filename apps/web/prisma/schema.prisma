@@ -35,6 +35,9 @@ model User {
   applicabilityRevisionsReviewed                         AssessmentRequirementApplicabilityRevision[] @relation("ApplicabilityRevisionReviewedBy")
   currentApplicabilityResolutionsEstablished             CurrentApplicabilityResolutionAuthority[]    @relation("CurrentApplicabilityResolutionAuthorityEstablishedBy")
   applicabilityResolutionAuthorityTransitionsEstablished ApplicabilityResolutionAuthorityTransition[] @relation("ApplicabilityResolutionAuthorityTransitionEstablishedBy")
+  frameworkCatalogueApprovalsApproved                    FrameworkCatalogueApproval[]                 @relation("FrameworkCatalogueApprovalApprovedBy")
+  currentFrameworkCatalogueAuthoritiesEstablished        CurrentFrameworkCatalogueAuthority[]         @relation("CurrentFrameworkCatalogueAuthorityEstablishedBy")
+  frameworkCatalogueAuthorityTransitionsEstablished      FrameworkCatalogueAuthorityTransition[]      @relation("FrameworkCatalogueAuthorityTransitionTransitionedBy")
 }
 
 model Organization {
@@ -74,9 +77,12 @@ model Framework {
   assessments                  Assessment[]
   currentAssessmentAuthorities CurrentAssessmentAuthority[]
 
-  requirements              ComplianceRequirement[]
-  regulatoryFactDefinitions RegulatoryFactDefinition[]
-  applicabilityContexts     ApplicabilityContext[]
+  requirements                           ComplianceRequirement[]
+  regulatoryFactDefinitions              RegulatoryFactDefinition[]
+  applicabilityContexts                  ApplicabilityContext[]
+  frameworkCatalogueApprovals            FrameworkCatalogueApproval[]
+  currentFrameworkCatalogueAuthority     CurrentFrameworkCatalogueAuthority?
+  frameworkCatalogueAuthorityTransitions FrameworkCatalogueAuthorityTransition[]
 }
 
 model ComplianceRequirement {
@@ -885,4 +891,73 @@ model ApplicabilityResolutionAuthorityTransition {
   @@index([previousRevisionId])
   @@index([newRevisionId])
   @@index([establishedById])
+}
+
+enum FrameworkCatalogueAuthorityTransitionType {
+  ESTABLISH
+  REPLACE
+  WITHDRAW
+}
+
+model FrameworkCatalogueApproval {
+  id                       String   @id @default(cuid())
+  frameworkId              String
+  version                  Int
+  contentManifest          String
+  contentHash              String
+  manifestAlgorithmVersion Int
+  approvedAt               DateTime
+  approvedById             String
+  reason                   String
+  createdAt                DateTime @default(now())
+
+  framework                    Framework                               @relation(fields: [frameworkId], references: [id], onDelete: Restrict)
+  approvedBy                   User                                    @relation("FrameworkCatalogueApprovalApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  currentAuthority             CurrentFrameworkCatalogueAuthority?
+  previousAuthorityTransitions FrameworkCatalogueAuthorityTransition[] @relation("PreviousFrameworkCatalogueApprovalAuthority")
+  newAuthorityTransitions      FrameworkCatalogueAuthorityTransition[] @relation("NewFrameworkCatalogueApprovalAuthority")
+
+  @@unique([frameworkId, version])
+  @@index([frameworkId])
+  @@index([approvedById])
+  @@index([contentHash])
+}
+
+model CurrentFrameworkCatalogueAuthority {
+  id                           String   @id @default(cuid())
+  frameworkId                  String   @unique
+  frameworkCatalogueApprovalId String   @unique
+  establishedAt                DateTime @default(now())
+  establishedById              String
+  reason                       String
+  createdAt                    DateTime @default(now())
+  updatedAt                    DateTime @updatedAt
+
+  framework                  Framework                  @relation(fields: [frameworkId], references: [id], onDelete: Restrict)
+  frameworkCatalogueApproval FrameworkCatalogueApproval @relation(fields: [frameworkCatalogueApprovalId], references: [id], onDelete: Restrict)
+  establishedBy              User                       @relation("CurrentFrameworkCatalogueAuthorityEstablishedBy", fields: [establishedById], references: [id], onDelete: Restrict)
+
+  @@index([establishedById])
+}
+
+model FrameworkCatalogueAuthorityTransition {
+  id                                   String                                    @id @default(cuid())
+  frameworkId                          String
+  previousFrameworkCatalogueApprovalId String?
+  newFrameworkCatalogueApprovalId      String?
+  transitionType                       FrameworkCatalogueAuthorityTransitionType
+  transitionedAt                       DateTime                                  @default(now())
+  transitionedById                     String
+  reason                               String
+  createdAt                            DateTime                                  @default(now())
+
+  framework                          Framework                   @relation(fields: [frameworkId], references: [id], onDelete: Restrict)
+  previousFrameworkCatalogueApproval FrameworkCatalogueApproval? @relation("PreviousFrameworkCatalogueApprovalAuthority", fields: [previousFrameworkCatalogueApprovalId], references: [id], onDelete: Restrict)
+  newFrameworkCatalogueApproval      FrameworkCatalogueApproval? @relation("NewFrameworkCatalogueApprovalAuthority", fields: [newFrameworkCatalogueApprovalId], references: [id], onDelete: Restrict)
+  transitionedBy                     User                        @relation("FrameworkCatalogueAuthorityTransitionTransitionedBy", fields: [transitionedById], references: [id], onDelete: Restrict)
+
+  @@index([frameworkId, transitionedAt])
+  @@index([previousFrameworkCatalogueApprovalId])
+  @@index([newFrameworkCatalogueApprovalId])
+  @@index([transitionedById])
 }

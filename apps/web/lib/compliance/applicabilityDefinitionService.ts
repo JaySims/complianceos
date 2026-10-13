@@ -383,13 +383,44 @@ async function persistApplicabilityDefinitionDraft(
   };
 }
 
+
+export async function createApplicabilityDefinitionInTransaction(
+  tx: Prisma.TransactionClient,
+  input: CreateApplicabilityDefinitionInput
+): Promise<CreateApplicabilityDefinitionResult> {
+  const effectiveRangeResult =
+    validateApplicabilityDefinitionEffectiveRange(input);
+
+  if (!effectiveRangeResult.success) {
+    return effectiveRangeResult;
+  }
+
+  const preparationResult =
+    await prepareApplicabilityDefinitionCreation(tx, input);
+
+  if (!preparationResult.success) {
+    return preparationResult;
+  }
+
+  const persisted = await persistApplicabilityDefinitionDraft(
+    tx,
+    input,
+    preparationResult.prepared
+  );
+
+  return {
+    success: true,
+    applicabilityDefinitionId: persisted.applicabilityDefinitionId,
+    version: persisted.version,
+    status: persisted.status,
+  };
+}
+
 export async function createApplicabilityDefinition(
   input: CreateApplicabilityDefinitionInput
 ): Promise<CreateApplicabilityDefinitionResult> {
   const effectiveRangeResult =
-    validateApplicabilityDefinitionEffectiveRange(
-      input
-    );
+    validateApplicabilityDefinitionEffectiveRange(input);
 
   if (!effectiveRangeResult.success) {
     return effectiveRangeResult;
@@ -397,47 +428,17 @@ export async function createApplicabilityDefinition(
 
   try {
     const created = await prisma.$transaction(
-      async (tx) => {
-        const preparationResult =
-          await prepareApplicabilityDefinitionCreation(
-            tx,
-            input
-          );
-
-        if (!preparationResult.success) {
-          return preparationResult;
-        }
-
-        const persisted =
-          await persistApplicabilityDefinitionDraft(
-            tx,
-            input,
-            preparationResult.prepared
-          );
-
-        return {
-          success: true as const,
-          applicabilityDefinitionId:
-            persisted.applicabilityDefinitionId,
-          version: persisted.version,
-          status: persisted.status,
-        };
-      },
+      async (tx) =>
+        createApplicabilityDefinitionInTransaction(tx, input),
       {
-        isolationLevel:
-          Prisma.TransactionIsolationLevel.Serializable,
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
       }
     );
 
     return created;
   } catch (error) {
-    if (
-      error instanceof Prisma.PrismaClientKnownRequestError
-    ) {
-      if (
-        error.code === "P2002" ||
-        error.code === "P2034"
-      ) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      if (error.code === "P2002" || error.code === "P2034") {
         return {
           success: false,
           reason: "CONCURRENT_VERSION_CONFLICT",
@@ -450,8 +451,7 @@ export async function createApplicabilityDefinition(
     return {
       success: false,
       reason: "PERSISTENCE_FAILED",
-      message:
-        "Applicability definition could not be persisted.",
+      message: "Applicability definition could not be persisted.",
     };
   }
 }

@@ -5,6 +5,8 @@ import {
 
 import { prisma } from "@/lib/prisma";
 import { canEstablishAssessmentAuthority } from "./assessmentAuthorityService";
+import { loadFrameworkCatalogueGovernedState } from "./frameworkCatalogueGovernedStateLoader";
+import { validateFrameworkCataloguePublicationIntegrity } from "./frameworkCataloguePublicationIntegrity";
 
 export type EstablishOrganizationFrameworkInput = {
   organizationId: string;
@@ -15,6 +17,8 @@ export type EstablishOrganizationFrameworkInput = {
 
 export type OrganizationFrameworkEstablishmentFailureReason =
   | "FRAMEWORK_NOT_FOUND"
+  | "FRAMEWORK_NOT_PUBLISHED"
+  | "FRAMEWORK_PUBLICATION_INVALID"
   | "USER_NOT_FOUND"
   | "USER_NOT_ACTIVE_ORGANIZATION_MEMBER"
   | "CURRENT_AUTHORITY_ALREADY_EXISTS"
@@ -46,6 +50,7 @@ export type OrganizationFrameworkEstablishmentResult =
 
 function normalizeAssessmentTitle(title: string): string {
   const normalized = title.trim();
+
   return normalized.length > 0
     ? normalized
     : "Compliance Assessment";
@@ -57,7 +62,8 @@ class OrganizationFrameworkEstablishmentInvariantError extends Error {
     message: string
   ) {
     super(message);
-    this.name = "OrganizationFrameworkEstablishmentInvariantError";
+    this.name =
+      "OrganizationFrameworkEstablishmentInvariantError";
   }
 }
 
@@ -77,6 +83,58 @@ export async function establishOrganizationFrameworkInTransaction(
     );
   }
 
+  const catalogueAuthority =
+    await transaction.currentFrameworkCatalogueAuthority.findUnique({
+      where: {
+        frameworkId: framework.id,
+      },
+      select: {
+        frameworkId: true,
+        frameworkCatalogueApproval: {
+          select: {
+            frameworkId: true,
+            contentManifest: true,
+            contentHash: true,
+            manifestAlgorithmVersion: true,
+          },
+        },
+      },
+    });
+
+  if (!catalogueAuthority) {
+    throw new OrganizationFrameworkEstablishmentInvariantError(
+      "FRAMEWORK_NOT_PUBLISHED",
+      "Compliance framework is not currently published for organization establishment."
+    );
+  }
+
+  const governedStateResult =
+    await loadFrameworkCatalogueGovernedState(
+      transaction,
+      framework.id
+    );
+
+  if (!governedStateResult.success) {
+    throw new OrganizationFrameworkEstablishmentInvariantError(
+      "FRAMEWORK_PUBLICATION_INVALID",
+      "Published compliance framework could not be validated safely."
+    );
+  }
+
+  const publicationIntegrity =
+    validateFrameworkCataloguePublicationIntegrity({
+      governedState: governedStateResult.governedState,
+      approval:
+        catalogueAuthority.frameworkCatalogueApproval,
+    });
+
+  if (!publicationIntegrity.success) {
+    throw new OrganizationFrameworkEstablishmentInvariantError(
+      "FRAMEWORK_PUBLICATION_INVALID",
+      "Published compliance framework failed publication integrity validation."
+    );
+  }
+
   const user = await transaction.user.findUnique({
     where: { id: input.userId },
     select: { id: true },
@@ -89,15 +147,16 @@ export async function establishOrganizationFrameworkInTransaction(
     );
   }
 
-  const membership = await transaction.organizationMember.findUnique({
-    where: {
-      userId_organizationId: {
-        userId: input.userId,
-        organizationId: input.organizationId,
+  const membership =
+    await transaction.organizationMember.findUnique({
+      where: {
+        userId_organizationId: {
+          userId: input.userId,
+          organizationId: input.organizationId,
+        },
       },
-    },
-    select: { active: true },
-  });
+      select: { active: true },
+    });
 
   if (!membership || !membership.active) {
     throw new OrganizationFrameworkEstablishmentInvariantError(
@@ -128,25 +187,26 @@ export async function establishOrganizationFrameworkInTransaction(
     );
   }
 
-  const assessment = await transaction.assessment.create({
-    data: {
-      title: normalizeAssessmentTitle(input.title),
-      score: null,
-      status: AssessmentStatus.DRAFT,
-      organizationId: input.organizationId,
-      frameworkId: framework.id,
-      userId: user.id,
-    },
-    select: {
-      id: true,
-      title: true,
-      score: true,
-      status: true,
-      organizationId: true,
-      frameworkId: true,
-      userId: true,
-    },
-  });
+  const assessment =
+    await transaction.assessment.create({
+      data: {
+        title: normalizeAssessmentTitle(input.title),
+        score: null,
+        status: AssessmentStatus.DRAFT,
+        organizationId: input.organizationId,
+        frameworkId: framework.id,
+        userId: user.id,
+      },
+      select: {
+        id: true,
+        title: true,
+        score: true,
+        status: true,
+        organizationId: true,
+        frameworkId: true,
+        userId: true,
+      },
+    });
 
   const policy = canEstablishAssessmentAuthority(
     input.organizationId,
@@ -189,14 +249,19 @@ export async function establishOrganizationFramework(
   try {
     return await prisma.$transaction<OrganizationFrameworkEstablishmentResult>(
       (transaction: Prisma.TransactionClient) =>
-        establishOrganizationFrameworkInTransaction(transaction, input),
+        establishOrganizationFrameworkInTransaction(
+          transaction,
+          input
+        ),
       {
-        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        isolationLevel:
+          Prisma.TransactionIsolationLevel.Serializable,
       }
     );
   } catch (error) {
     if (
-      error instanceof OrganizationFrameworkEstablishmentInvariantError
+      error instanceof
+      OrganizationFrameworkEstablishmentInvariantError
     ) {
       return {
         success: false,

@@ -442,77 +442,76 @@ async function persistApplicabilityDefinitionApproval(
  * ============================================================
  */
 
+export async function approveApplicabilityDefinitionInTransaction(
+  transaction: Prisma.TransactionClient,
+  input: ApproveApplicabilityDefinitionInput
+): Promise<ApproveApplicabilityDefinitionResult> {
+  const validation =
+    await validateApplicabilityDefinitionApprovalContext(
+      transaction,
+      input
+    );
+
+  if (!validation.success) {
+    return validation;
+  }
+
+  const policy = canApproveApplicabilityDefinition(
+    validation.context.definition.status
+  );
+
+  if (!policy.success) {
+    switch (policy.reason) {
+      case "DEFINITION_ALREADY_APPROVED":
+        return {
+          success: false,
+          reason: policy.reason,
+          message: "Applicability definition is already approved.",
+        };
+
+      case "INVALID_DEFINITION_STATUS":
+        return {
+          success: false,
+          reason: policy.reason,
+          message:
+            "Applicability definition is not in a state that may be approved.",
+        };
+
+      default: {
+        const exhaustiveCheck: never = policy.reason;
+        throw new Error(
+          `Unhandled applicability definition approval policy result: ${exhaustiveCheck}`
+        );
+      }
+    }
+  }
+
+  const semanticFailure =
+    await validateStoredApplicabilityDefinitionRuleForApproval(
+      transaction,
+      validation.context
+    );
+
+  if (semanticFailure) {
+    return semanticFailure;
+  }
+
+  return persistApplicabilityDefinitionApproval(
+    transaction,
+    input,
+    validation.context
+  );
+}
+
 export async function approveApplicabilityDefinition(
   input: ApproveApplicabilityDefinitionInput
 ): Promise<ApproveApplicabilityDefinitionResult> {
   try {
     return await prisma.$transaction<ApproveApplicabilityDefinitionResult>(
-      async (
-        transaction: Prisma.TransactionClient
-      ): Promise<ApproveApplicabilityDefinitionResult> => {
-        const validation =
-          await validateApplicabilityDefinitionApprovalContext(
-            transaction,
-            input
-          );
-
-        if (!validation.success) {
-          return validation;
-        }
-
-        const policy =
-          canApproveApplicabilityDefinition(
-            validation.context.definition.status
-          );
-
-        if (!policy.success) {
-          switch (policy.reason) {
-            case "DEFINITION_ALREADY_APPROVED":
-              return {
-                success: false,
-                reason: policy.reason,
-                message:
-                  "Applicability definition is already approved.",
-              };
-
-            case "INVALID_DEFINITION_STATUS":
-              return {
-                success: false,
-                reason: policy.reason,
-                message:
-                  "Applicability definition is not in a state that may be approved.",
-              };
-
-            default: {
-              const exhaustiveCheck: never =
-                policy.reason;
-
-              throw new Error(
-                `Unhandled applicability definition approval policy result: ${exhaustiveCheck}`
-              );
-            }
-          }
-        }
-
-        const semanticFailure =
-          await validateStoredApplicabilityDefinitionRuleForApproval(
-            transaction,
-            validation.context
-          );
-
-        if (semanticFailure) {
-          return semanticFailure;
-        }
-
-        return persistApplicabilityDefinitionApproval(
-          transaction,
-          input,
-          validation.context
-        );
-      },
+      (transaction: Prisma.TransactionClient) =>
+        approveApplicabilityDefinitionInTransaction(transaction, input),
       {
-        isolationLevel:
-          Prisma.TransactionIsolationLevel.Serializable,
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
       }
     );
   } catch (error) {
