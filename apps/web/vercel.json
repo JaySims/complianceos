@@ -1,0 +1,15 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "schedules": {
+    "recover-upload-intents": {
+      "schedule": "*/15 * * * *",
+      "path": "/api/cron/recover-upload-intents",
+      "requestMethod": "GET"
+    },
+    "cleanup-upload-intents": {
+      "schedule": "7,37 * * * *",
+      "path": "/api/cron/cleanup-upload-intents",
+      "requestMethod": "GET"
+    }
+  }
+}
