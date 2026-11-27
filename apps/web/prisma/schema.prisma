@@ -22,6 +22,7 @@ model User {
   organization    Organization?    @relation("PrimaryOrganizationUsers", fields: [organizationId], references: [id])
 
   memberships OrganizationMember[]
+  documentUploadIntents DocumentUploadIntent[]
 
   executiveMissions                                      ExecutiveMission[]                           @relation("MissionStartedBy")
   regulatoryFactValuesEstablished                        RegulatoryFactValue[]                        @relation("RegulatoryFactEstablishedBy")
@@ -57,6 +58,7 @@ model Organization {
   assessments                  Assessment[]
   currentAssessmentAuthorities CurrentAssessmentAuthority[]
   documents                    Document[]
+  documentUploadIntents         DocumentUploadIntent[]
   users                        User[]                       @relation("PrimaryOrganizationUsers")
 
   members OrganizationMember[]
@@ -206,12 +208,47 @@ model Document {
   organization               Organization                @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   evidence                   Evidence[]
   regulatoryFactValueSources RegulatoryFactValueSource[]
+  uploadIntent                DocumentUploadIntent?
 
   @@index([organizationId])
   @@index([status])
   @@index([expiresAt])
+  @@unique([filePath])
 }
 
+model DocumentUploadIntent {
+  id             String                     @id @default(cuid())
+  organizationId String
+  userId         String
+  filePath       String                     @unique
+  fileName       String
+  documentType   String
+  mimeType       String
+  fileSize       Int
+  documentId     String?                    @unique
+  status         DocumentUploadIntentStatus @default(PENDING)
+
+  expiresAt                  DateTime
+  finalizationLeaseExpiresAt DateTime?
+  cleanupLeaseExpiresAt      DateTime?
+  cleanupAfter               DateTime?
+  cleanupAttemptCount        Int            @default(0)
+  finalizedAt                DateTime?
+  deletedAt                  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Restrict)
+  document     Document?    @relation(fields: [documentId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, status])
+  @@index([status, expiresAt])
+  @@index([status, cleanupAfter])
+  @@index([status, finalizationLeaseExpiresAt])
+  @@index([status, cleanupLeaseExpiresAt])
+}
 model AuditLog {
   id        String   @id @default(cuid())
   action    String
@@ -316,6 +353,15 @@ enum DocumentVerificationStatus {
   VERIFIED
   REJECTED
   EXPIRED
+}
+
+enum DocumentUploadIntentStatus {
+  PENDING
+  FINALIZING
+  FINALIZED
+  FAILED
+  CLEANING
+  DELETED
 }
 
 enum EvidenceVerificationStatus {

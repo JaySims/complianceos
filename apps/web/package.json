@@ -6,10 +6,12 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "vitest run"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
+    "@vercel/blob": "^2.8.2",
     "bcrypt": "^6.0.0",
     "bcryptjs": "^3.0.3",
     "cookie": "^2.0.1",
@@ -20,6 +22,7 @@
     "prisma": "^6.19.3",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "yauzl": "3.4.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -31,11 +34,14 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/yauzl": "3.4.0",
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
     "tailwindcss": "^4",
     "tsx": "^4.23.0",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vite": "7.3.7",
+    "vitest": "4.1.11"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
